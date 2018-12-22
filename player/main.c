@@ -36,6 +36,7 @@
 #include "common/av_log.h"
 #include "common/codecs.h"
 #include "common/encode.h"
+#include "common/stats.h"
 #include "options/m_config.h"
 #include "options/m_option.h"
 #include "options/m_property.h"
@@ -442,6 +443,8 @@ int mpv_main(int argc, char *argv[])
         return 1;
 
     mpctx->is_cli = true;
+
+    stats_init(gst);
 
     char **options = argv && argv[0] ? argv + 1 : NULL; // skips program name
     int r = mp_initialize(mpctx, options);

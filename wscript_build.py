@@ -268,6 +268,7 @@ def build(ctx):
         ( "common/recorder.c" ),
         ( "common/tags.c" ),
         ( "common/version.c" ),
+        ( "common/stats.c" ),
 
         ## Demuxers
         ( "demux/codec_tags.c" ),

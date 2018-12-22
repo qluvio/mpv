@@ -20,6 +20,7 @@
 
 #include "common/common.h"
 #include "common/msg.h"
+#include "common/stats.h"
 
 #include "demux.h"
 #include "timeline.h"
@@ -254,6 +255,28 @@ static int d_fill_buffer(struct demuxer *demuxer)
                 eos_reached &= vs->eos_packets >= max_packets;
             }
         }
+    }
+
+    {
+        // Stats update
+        int segstart = 0;
+
+        // Figure out type of stream
+        int curtype = 0;
+        for (int n = 0; n < p->num_streams; n++) {
+            struct virtual_stream *vs = p->streams[n];
+            if (vs->selected) {
+                curtype = vs->sh->type;
+            }
+        }
+
+        if (seg->index > stats_curseg(gst, curtype)) {
+            segstart = 1;
+            stats_curseg_set(gst, curtype, seg->index);
+        }
+
+        stats_update_demux(gst, curtype, segstart, pkt == NULL, pkt ? pkt->pts : 0,
+            seg->index, seg->start, seg->end, seg->d_start);
     }
 
     if (eos_reached || !pkt) {

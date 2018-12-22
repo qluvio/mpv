@@ -24,6 +24,7 @@
 #include "common/msg.h"
 #include "common/tags.h"
 #include "common/av_common.h"
+#include "common/stats.h"
 #include "stream.h"
 #include "options/m_config.h"
 #include "options/m_option.h"
@@ -84,6 +85,9 @@ static int fill_buffer(stream_t *s, char *buffer, int max_len)
 #else
     int r = avio_read(avio, buffer, max_len);
 #endif
+
+    stats_update_seg_read(gst, s->url, (int)stream_tell(s), (int)r);
+
     return (r <= 0) ? -1 : r;
 }
 
@@ -116,6 +120,7 @@ static void close_f(stream_t *stream)
      */
     if (avio)
         avio_close(avio);
+    stats_update_seg_close(gst, stream->url);
 }
 
 static int control(stream_t *s, int cmd, void *arg)
@@ -308,6 +313,8 @@ static int open_f(stream_t *stream)
         // Setting timeout enables listen mode - force it to disabled.
         av_dict_set(&dict, "timeout", "0", 0);
     }
+
+    stats_update_seg_open(gst, filename);
 
     int err = avio_open2(&avio, filename, flags, &cb, &dict);
     if (err < 0) {
