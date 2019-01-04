@@ -483,5 +483,8 @@ int mpv_main(int argc, char *argv[])
         rc = mpctx->quit_custom_rc;
 
     mp_destroy(mpctx);
+
+    stats_finalize(gst);
+
     return rc;
 }

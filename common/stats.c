@@ -59,7 +59,8 @@ void stats_init(struct stats *st)
     st->curseg_a = st->curseg_v = -1;
 
     st->manifest_open_usec = 0;
-    st->init_seg_open_usec = 0;
+    st->init_seg_video_open_usec = 0;
+    st->init_seg_audio_open_usec = 0;
 }
 
 // MM Todo - Why is this never called?
@@ -75,6 +76,17 @@ void seginfo_init(struct seginfo *sinf)
 {
     sinf->type = dash_unset; // manifest, init-video, init-audio, video, audio
     sinf->index = -1; // if vidio or audio, the segment number
+}
+
+void packetinfo_init(struct packetinfo *pinf)
+{
+    pinf->type = packet_unset;
+    pinf->seg_index = -1;
+    pinf->start_of_segment = 0;
+    pinf->end_of_segment = 0;
+    pinf->pts = 0;
+    pinf->seg_start = 0;
+    pinf->seg_end = 0;
 }
 
 int stats_curseg(struct stats *st, int type) {
@@ -179,7 +191,9 @@ void stats_update_seg_open(struct stats *st, const char* url)
     } else if ( si_tmp.type == dash_manifest ) {
         st->manifest_open_usec = open_usec;
     } else if ( si_tmp.type == dash_init_video ) {
-        st->init_seg_open_usec = open_usec;
+        st->init_seg_video_open_usec = open_usec;
+    } else if ( si_tmp.type == dash_init_audio ) {
+        st->init_seg_audio_open_usec = open_usec;
     }
 }
 
@@ -239,7 +253,87 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     int seg_index, double seg_start, double seg_end, double seg_dstart)
 {
     printf("ELVTRACE DMUX PKT - enter\n");
-    printf("ELVTRC DEMUX PKT type=%d sos=%d eos=%d pts=%f seg_index=%d seg_start=%f seg_end=%f seg_dstart=%f\n",
-        type, sos, eos, pts,
+    struct packetinfo pi_tmp;
+    packetinfo_init(&pi_tmp);
+    long long dmux_usec = get_usec(st);
+    if (type == 1) {
+        pi_tmp.type = packet_video;
+    } else if (type == 2 ) {
+        pi_tmp.type = packet_audio;
+    }
+    pi_tmp.seg_index = seg_index;
+    pi_tmp.start_of_segment = sos;
+    pi_tmp.end_of_segment = eos;
+    pi_tmp.pts = pts;
+    pi_tmp.seg_start = seg_start;
+    pi_tmp.seg_end = seg_end;
+
+    struct packetstats* ps;
+    if (pi_tmp.type == packet_video) {
+        pi_tmp.packet_index = st->curpacket_v;
+        st->curpacket_v += 1;
+        ps = &(st->packetstats_video[pi_tmp.packet_index - 1]);
+    } else {
+        pi_tmp.packet_index = st->curpacket_a;
+        st->curpacket_a += 1;
+        ps = &(st->packetstats_audio[pi_tmp.packet_index - 1]);
+    }
+    ps->packet_dmux_usec = dmux_usec;
+    ps->packetinfo = pi_tmp;
+
+    printf("ELVTRC DEMUX PKT type=%d sos=%d eos=%d packet_index=%d pts=%f seg_index=%d seg_start=%f seg_end=%f seg_dstart=%f\n",
+        type, sos, eos, ps->packetinfo.packet_index, pts,
         seg_index, seg_start, seg_end, seg_dstart);
+
 }
+
+
+void stats_finalize(struct stats *st)
+{
+
+    long long t0 = st->manifest_open_usec;
+
+    // Todo - Need to substract time to set up stream but how to get this value?
+    long long arrival_all =
+        st->init_seg_video_open_usec > st->init_seg_audio_open_usec ?  st->init_seg_video_open_usec : st->init_seg_audio_open_usec;
+    arrival_all = arrival_all > st->manifest_open_usec ? arrival_all : st->manifest_open_usec;
+
+    long long time_to_start_play = st->segstats_video[0].seg_open_usec;
+
+    // Todo - This is not the right value
+    long long time_to_decode_first_frame = st->segstats_video[0].seg_first_packet_read_usec - t0;
+
+    int i = 0;
+
+    for ( i = 0; i < st->curseg_v; i++ ) {
+
+        long long segment_arrival_time = st->segstats_video[i].seg_first_packet_read_usec - st->segstats_video[0].seg_open_usec;
+
+        long long segment_relative_ttfb =  st->segstats_video[i].seg_first_packet_read_usec - arrival_all;
+
+        long long segment_relative_tt = st->segstats_video[i].seg_close_usec - arrival_all;
+
+        printf("segment: arrival=%lld relative_ttfb=%lld relative_tt=%lld\n", segment_arrival_time, segment_relative_ttfb, segment_relative_tt);
+
+    }
+
+    int j = 0;
+
+    for ( j = 0; j < st->curpacket_v; j++ ) {
+
+        int this_segment_index = st->packetstats_video[j].packetinfo.seg_index;
+
+        time_to_decode_first_frame = st->segstats_video[this_segment_index].seg_first_packet_read_usec - t0;
+
+        long long packet_decode_time = st->packetstats_video[j].packet_dmux_usec - time_to_decode_first_frame;
+
+        long long availability_ahead = st->packetstats_video[j].packetinfo.pts - packet_decode_time;
+
+        printf("packet: seg=%d packet=%d decode_time=%lld availability_ahead=%lld\n", this_segment_index, j, packet_decode_time, availability_ahead);
+
+    }
+
+}
+
+
+ 
