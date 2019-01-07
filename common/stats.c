@@ -55,19 +55,19 @@ void stats_init(struct stats *st)
     st = gst;
 
     st->start_usec = get_usec_now();
-
+    st->seg_duration = 6000000; // MM Todo - hard coded for now
     st->curseg_a = st->curseg_v = -1;
 
     st->manifest_open_usec = 0;
     st->init_seg_video_open_usec = 0;
     st->init_seg_audio_open_usec = 0;
+    st->first_seg_open_usec = 0;
 }
 
-// MM Todo - Why is this never called?
 void segstats_init(struct segstats *ss)
 {
     ss->seg_open_usec = 0;
-    ss->seg_first_packet_read_usec = 0;
+    ss->seg_first_buf_read_usec = 0;
     ss->seg_close_usec = 0;
     seginfo_init(&ss->seginfo);
 }
@@ -145,7 +145,7 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
         if (strcmp(suffix,"m4v") == 0) {
             printf("ELVTRC URL_SEG_INFO dash_video: seg=%s\n", seg);
             // init segment or regular?
-            if (strcmp(seg,"init") == 0) {
+            if (strcmp(seg, "init") == 0) {
                 si->type = dash_init_video;
             } else {
                 si->type = dash_video;
@@ -180,21 +180,31 @@ void stats_update_seg_open(struct stats *st, const char* url)
     url_seg_info(st, &si_tmp, baseurl);
     printf("ELVTRC NET OPEN seginfo type=%d, index=%d", si_tmp.type, si_tmp.index);
 
-    // TODO: Need to add audio segstats array and init seg open time
+    // TODO: Need to add audio segstats array
     long long open_usec = get_usec(st);
+
+    struct segstats ss_tmp;
+    segstats_init(&ss_tmp);
+    ss_tmp.seg_open_usec = open_usec;
+    ss_tmp.seginfo = si_tmp;
+
+    if ( si_tmp.index - 1 == 0 ) {// first segment
+        st->first_seg_open_usec = open_usec;
+    }
+
     if ( si_tmp.type == dash_video ) {
-            struct segstats* ss;
-            ss = &(st->segstats_video[si_tmp.index-1]);
-            segstats_init(ss);
-            ss->seg_open_usec = open_usec;
-            ss->seginfo = si_tmp;
-    } else if ( si_tmp.type == dash_manifest ) {
+        st->segstats_video[si_tmp.index-1] = ss_tmp;
+    }  else if ( si_tmp.type == dash_manifest ) {
+        st->segstats_manifest = ss_tmp;
         st->manifest_open_usec = open_usec;
-    } else if ( si_tmp.type == dash_init_video ) {
+    }  else if ( si_tmp.type == dash_init_video ) {
+        st->segstats_video_init = ss_tmp;
         st->init_seg_video_open_usec = open_usec;
-    } else if ( si_tmp.type == dash_init_audio ) {
+    }  else if ( si_tmp.type == dash_init_audio ) {
+        st->segstats_audio_init = ss_tmp;
         st->init_seg_audio_open_usec = open_usec;
     }
+
 }
 
 void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
@@ -208,17 +218,27 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, baseurl);
 
-    // Todo - Add audio
-    if ( (off == 0 ) && ( si_tmp.type == dash_video ) ) { // First read of the segment
+    if ( off == 0 )  { // First read of the segment
+
         long long ttfb = get_usec(st);
         printf("ELVTRC segment ttfb=%lld url=%s\n", ttfb, basename(url));
-        // get the segstat from the segsarray
-        struct segstats* ss;
-        ss = &(st->segstats_video[si_tmp.index - 1]);
-        assert ((ss->seginfo.type == dash_video));
-        // set the time of the first packet
-        ss->seg_first_packet_read_usec = ttfb;
-        ss->seginfo = si_tmp;
+
+        if ( si_tmp.type == dash_video ) {
+            st->segstats_video[si_tmp.index - 1].seg_first_buf_read_usec = ttfb;
+        }
+        else if ( si_tmp.type == dash_manifest )  {
+            st->segstats_manifest.seg_first_buf_read_usec = ttfb;
+        }
+        else if ( si_tmp.type == dash_init_video )  {
+            st->segstats_video_init.seg_first_buf_read_usec = ttfb;
+        }
+        else if ( si_tmp.type == dash_init_audio )  {
+            st->segstats_video_init.seg_first_buf_read_usec = ttfb;
+        }
+
+        if ( si_tmp.index - 1 == 0 ) { // first segment, first frame read
+            st->first_buf_read_usec = ttfb;
+        }
     }
 
     if (rsz <= 0) // EOF
@@ -234,17 +254,21 @@ void stats_update_seg_close(struct stats *st, const char* url)
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, baseurl);
+
     long long ttclose = get_usec(st);
     printf("ELVTRC segment close=%lld url=%s\n", ttclose, basename(url));
 
-    // Todo - Add audio
-    if (si_tmp.type == dash_video)  { 
-        struct segstats* ss;
-        ss = &(st->segstats_video[si_tmp.index - 1]);
-        // set the segment close time
-        ss->seg_close_usec = ttclose;
-        ss->seginfo = si_tmp;
+
+    if (si_tmp.type == dash_video)  {
+        st->segstats_video[si_tmp.index - 1].seg_close_usec = ttclose;
+    } else if (si_tmp.type == dash_manifest) {
+        st->segstats_manifest.seg_close_usec = ttclose ;
+    } else if ( si_tmp.type == dash_init_video )  {
+        st->segstats_video_init.seg_close_usec = ttclose;
+    } else if ( si_tmp.type == dash_init_audio )  {
+        st->segstats_audio_init.seg_close_usec = ttclose;
     }
+
     printf("ELVTRC NET CLOSE exit.\n");
 
 }
@@ -292,48 +316,82 @@ void stats_finalize(struct stats *st)
 {
 
     long long t0 = st->manifest_open_usec;
+    long long t1 = st->first_seg_open_usec;
+    long long t2 = st->first_buf_read_usec; 
 
-    // Todo - Need to substract time to set up stream but how to get this value?
-    long long arrival_all =
+    long long setup_time =
         st->init_seg_video_open_usec > st->init_seg_audio_open_usec ?  st->init_seg_video_open_usec : st->init_seg_audio_open_usec;
-    arrival_all = arrival_all > st->manifest_open_usec ? arrival_all : st->manifest_open_usec;
-
-    long long time_to_start_play = st->segstats_video[0].seg_open_usec;
-
-    // Todo - This is not the right value
-    long long time_to_decode_first_frame = st->segstats_video[0].seg_first_packet_read_usec - t0;
+    setup_time = setup_time > st->manifest_open_usec ? setup_time : st->manifest_open_usec;
 
     int i = 0;
 
+    long long manifest_ttfb = 0;
+    long long video_init_ttfb = 0;
+    long long audio_init_ttfb = 0;
+    long long segment_ttfb = 0; // time of first read relative to this segment's request time
+    long long manifest_tt = 0;
+    long long video_init_tt = 0;
+    long long audio_init_tt = 0;
+    long long segment_tt = 0; // time of last read relative to this segment's request time
+
+    manifest_ttfb = st->segstats_manifest.seg_first_buf_read_usec - st->segstats_manifest.seg_open_usec;
+    video_init_ttfb =  st->segstats_video_init.seg_first_buf_read_usec - st->segstats_video_init.seg_open_usec;
+    audio_init_ttfb = st->segstats_audio_init.seg_first_buf_read_usec - st->segstats_audio_init.seg_open_usec;
+
+    manifest_tt = st->segstats_manifest.seg_close_usec - st->segstats_manifest.seg_open_usec;
+    video_init_tt =  st->segstats_video_init.seg_close_usec - st->segstats_video_init.seg_open_usec;
+    audio_init_tt = st->segstats_audio_init.seg_close_usec - st->segstats_audio_init.seg_open_usec;
+
+    printf("manifest ttfb=%lld tt=%lld video_init ttfb=%lld tt=%lld audio_init_ttfb=%lld audio_init_tt=%lld\n", manifest_ttfb, manifest_tt, video_init_ttfb, video_init_tt, audio_init_ttfb, audio_init_tt);
+
+    // SEGMENTS
+    long long play_time = 0;
+    long long ahead_of_play_time = 0;
+    long long latency = 0;
+
     for ( i = 0; i < st->curseg_v; i++ ) {
 
-        long long segment_arrival_time = st->segstats_video[i].seg_first_packet_read_usec - st->segstats_video[0].seg_open_usec;
-
-        long long segment_relative_ttfb =  st->segstats_video[i].seg_first_packet_read_usec - arrival_all;
-
-        long long segment_relative_tt = st->segstats_video[i].seg_close_usec - arrival_all;
-
-        printf("segment: arrival=%lld relative_ttfb=%lld relative_tt=%lld\n", segment_arrival_time, segment_relative_ttfb, segment_relative_tt);
+        segment_ttfb = st->segstats_video[i].seg_first_buf_read_usec - st->segstats_video[0].seg_open_usec;
+        segment_tt =  st->segstats_video[i].seg_close_usec - st->segstats_video[0].seg_open_usec;
+        play_time = t1 + st->seg_duration * i;
+        ahead_of_play_time = play_time - st->segstats_video[i].seg_close_usec;
+        latency = st->segstats_video[i].seg_close_usec - t0; 
+        printf("ELVTRC SEG %d time_to_first_buf=%lld total_time=%lld expected_play_time=%lld ahead_time=%lld latency=%lld\n", i, segment_ttfb, segment_tt, play_time, ahead_of_play_time, latency);
 
     }
 
+    // FRAMES ("PACKETS")
     int j = 0;
+
+    play_time = 0;
+    ahead_of_play_time = 0;
+    int this_segment_index = 0;
+    long long decode_time = 0;
+    latency = 0;
 
     for ( j = 0; j < st->curpacket_v; j++ ) {
 
-        int this_segment_index = st->packetstats_video[j].packetinfo.seg_index;
+        if ( st->packetstats_video[j].packetinfo.end_of_segment == 1 ) {
+            continue;
+        }
 
-        time_to_decode_first_frame = st->segstats_video[this_segment_index].seg_first_packet_read_usec - t0;
+        this_segment_index = st->packetstats_video[j].packetinfo.seg_index;
+        printf("MMSEG %d play_time = %lld + %lld + %lld\n", this_segment_index, t2, this_segment_index * st->seg_duration, st->packetstats_video[j].packetinfo.pts);
+        play_time =  t2 + this_segment_index * st->seg_duration + st->packetstats_video[j].packetinfo.pts;
+        ahead_of_play_time = play_time - st->packetstats_video[j].packet_dmux_usec;
 
-        long long packet_decode_time = st->packetstats_video[j].packet_dmux_usec - time_to_decode_first_frame;
+        if ( j > 0 ) {
+            decode_time = st->packetstats_video[j].packet_dmux_usec - st->packetstats_video[j-1].packet_dmux_usec;
+        } else {
+            decode_time =  st->packetstats_video[0].packet_dmux_usec - t2;
+        }
 
-        long long availability_ahead = st->packetstats_video[j].packetinfo.pts - packet_decode_time;
+        latency = st->packetstats_video[j].packet_dmux_usec - t0;
 
-        printf("packet: seg=%d packet=%d decode_time=%lld availability_ahead=%lld\n", this_segment_index, j, packet_decode_time, availability_ahead);
+        printf("ELVTRC FR %d seg=%d play_time=%lld ahead_time=%lld decode_time=%lld latency=%lld\n", j, this_segment_index, play_time, ahead_of_play_time, decode_time, latency);
 
     }
 
 }
 
 
- 

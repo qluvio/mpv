@@ -48,8 +48,8 @@ struct packetinfo {
 struct segstats {
 
     // open time, first packet read time, close time
-    long long seg_open_usec;
-    long long seg_first_packet_read_usec;
+    long long seg_open_usec; // MM: Todo - need to add audio; these are all for video
+    long long seg_first_buf_read_usec;
     long long seg_close_usec;
     struct seginfo seginfo;
 };
@@ -57,6 +57,7 @@ struct segstats {
 struct packetstats {
 
     long long packet_dmux_usec;
+    // start of play is pts 0
     struct packetinfo packetinfo;
 
 };
@@ -70,13 +71,19 @@ struct stats {
 
     long long start_usec; // initialization time for structure
 
+    long long seg_duration; // Todo - need to extract
+    struct segstats segstats_manifest;
+    struct segstats segstats_video_init;
+    struct segstats segstats_audio_init;
     struct segstats segstats_video[1000]; // array of stats for individual video segments
     struct segstats segstats_audio[1000]; // audio segments
-    long long manifest_open_usec;
+    long long manifest_open_usec; // this is t0
     long long init_seg_video_open_usec;
     long long init_seg_audio_open_usec;
-    struct packetstats packetstats_video[1000 * 100];
-    struct packetstats packetstats_audio[1000 * 100];
+    long long first_seg_open_usec; // this becomes t1
+    long long first_buf_read_usec; // this becomes t2
+    struct packetstats packetstats_video[1000 * 1000]; // packets are actually "frames" in video; nothing to do with network
+    struct packetstats packetstats_audio[1000 * 1000];
 };
 
 extern struct stats *gst;
