@@ -57,11 +57,14 @@ void stats_init(struct stats *st)
     st->start_usec = get_usec_now();
     st->seg_duration = 6000000; // MM Todo - hard coded for now
     st->curseg_a = st->curseg_v = -1;
+    st->curpacket_a = st->curpacket_v = 0;
 
     st->manifest_open_usec = 0;
     st->init_seg_video_open_usec = 0;
     st->init_seg_audio_open_usec = 0;
     st->first_seg_open_usec = 0;
+    st->first_buf_read_usec = 0;
+    st->first_packet_decode_usec = 0;
 }
 
 void segstats_init(struct segstats *ss)
@@ -236,7 +239,7 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
             st->segstats_video_init.seg_first_buf_read_usec = ttfb;
         }
 
-        if ( si_tmp.index - 1 == 0 ) { // first segment, first frame read
+        if ( si_tmp.index - 1 == 0 ) { // first segment, first buf read
             st->first_buf_read_usec = ttfb;
         }
     }
@@ -277,14 +280,14 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     int seg_index, double seg_start, double seg_end, double seg_dstart)
 {
     printf("ELVTRACE DMUX PKT - enter\n");
+    if  ( pts < 0 ) {
+        return;
+    }
+
     struct packetinfo pi_tmp;
     packetinfo_init(&pi_tmp);
     long long dmux_usec = get_usec(st);
-    if (type == 1) {
-        pi_tmp.type = packet_video;
-    } else if (type == 2 ) {
-        pi_tmp.type = packet_audio;
-    }
+    pi_tmp.type = type;
     pi_tmp.seg_index = seg_index;
     pi_tmp.start_of_segment = sos;
     pi_tmp.end_of_segment = eos;
@@ -295,29 +298,39 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     struct packetstats* ps;
     if (pi_tmp.type == packet_video) {
         pi_tmp.packet_index = st->curpacket_v;
+        if (st->curpacket_v == 0 && seg_index == 0) {
+            printf("ELVTRC DEMUX PKT: first packet of first segment! %lld\n", dmux_usec);
+            st->first_packet_decode_usec = dmux_usec;
+        }
         st->curpacket_v += 1;
-        ps = &(st->packetstats_video[pi_tmp.packet_index - 1]);
+        ps = &(st->packetstats_video[pi_tmp.packet_index]);
     } else {
         pi_tmp.packet_index = st->curpacket_a;
         st->curpacket_a += 1;
-        ps = &(st->packetstats_audio[pi_tmp.packet_index - 1]);
+        ps = &(st->packetstats_audio[pi_tmp.packet_index]);
     }
     ps->packet_dmux_usec = dmux_usec;
     ps->packetinfo = pi_tmp;
 
-    printf("ELVTRC DEMUX PKT type=%d sos=%d eos=%d packet_index=%d pts=%f seg_index=%d seg_start=%f seg_end=%f seg_dstart=%f\n",
-        type, sos, eos, ps->packetinfo.packet_index, pts,
-        seg_index, seg_start, seg_end, seg_dstart);
+    printf("ELVTRC DEMUX PKT type=%d sos=%d eos=%d packet_index=%d pts=%f seg_index=%d seg_start=%f seg_end=%f seg_dstart=%f dmux_usec=%lld first=%lld\n",
+        type, sos, eos, ps->packetinfo.packet_index, pts, seg_index, seg_start, seg_end, seg_dstart, dmux_usec, st->first_packet_decode_usec);
 
 }
 
+
+long long to_usec( double d ) {
+
+    long long l = d * 1000000;
+    return l;
+
+}
 
 void stats_finalize(struct stats *st)
 {
 
     long long t0 = st->manifest_open_usec;
     long long t1 = st->first_seg_open_usec;
-    long long t2 = st->first_buf_read_usec; 
+    long long t2 = st->first_packet_decode_usec;
 
     long long setup_time =
         st->init_seg_video_open_usec > st->init_seg_audio_open_usec ?  st->init_seg_video_open_usec : st->init_seg_audio_open_usec;
@@ -366,8 +379,11 @@ void stats_finalize(struct stats *st)
     play_time = 0;
     ahead_of_play_time = 0;
     int this_segment_index = 0;
+
     long long decode_time = 0;
+    double this_pts = 0;
     latency = 0;
+
 
     for ( j = 0; j < st->curpacket_v; j++ ) {
 
@@ -376,8 +392,15 @@ void stats_finalize(struct stats *st)
         }
 
         this_segment_index = st->packetstats_video[j].packetinfo.seg_index;
-        printf("MMSEG %d play_time = %lld + %lld + %lld\n", this_segment_index, t2, this_segment_index * st->seg_duration, st->packetstats_video[j].packetinfo.pts);
-        play_time =  t2 + this_segment_index * st->seg_duration + st->packetstats_video[j].packetinfo.pts;
+
+        this_pts = st->packetstats_video[j].packetinfo.seg_start + st->packetstats_video[j].packetinfo.pts;
+
+        // printf("MMSEG this_pts %f %lld\n", this_pts, to_usec(this_pts));
+
+        play_time =  t2 + to_usec(this_pts);
+
+        // printf("MMSEG play_time %lld = %lld + %lld\n", play_time, t2, to_usec(this_pts));
+
         ahead_of_play_time = play_time - st->packetstats_video[j].packet_dmux_usec;
 
         if ( j > 0 ) {

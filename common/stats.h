@@ -39,9 +39,9 @@ struct packetinfo {
     int packet_index;
     int start_of_segment;
     int end_of_segment;
-    long long pts;
-    long long seg_start;
-    long long seg_end;
+    float pts;
+    double seg_start;
+    double seg_end;
 
 };
 
@@ -81,7 +81,8 @@ struct stats {
     long long init_seg_video_open_usec;
     long long init_seg_audio_open_usec;
     long long first_seg_open_usec; // this becomes t1
-    long long first_buf_read_usec; // this becomes t2
+    long long first_buf_read_usec;
+    long long first_packet_decode_usec; // this becomes t2
     struct packetstats packetstats_video[1000 * 1000]; // packets are actually "frames" in video; nothing to do with network
     struct packetstats packetstats_audio[1000 * 1000];
 };
@@ -110,3 +111,5 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     int seg_index, double seg_start, double seg_end, double seg_dstart);
 
 void stats_finalize(struct stats *st);
+
+long long to_usec(double d);
