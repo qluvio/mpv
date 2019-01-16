@@ -126,7 +126,7 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
     // Parse on last "." and "-"
     char *suffix = strrchr(url, '.') + 1;
     printf("ELVTRC URL_SEG_INFO suffix=%s\n", suffix);
-    if (strcmp(suffix,"mpd") == 0) {
+    if (strcmp(suffix,"mpd") == 0 || strcmp(suffix,"m3u8") == 0) {
         si->type=dash_manifest;
         printf("ELVTRC URL_SEG_INFO dash_manifest\n");
     }
