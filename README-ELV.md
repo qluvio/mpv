@@ -4,25 +4,41 @@
 
 ## Dependencies - Mac OSX
 
-  `brew install lua@5.1`
+  `brew install lua@5.1`  # Will work without when using --disable-lua
   `brew install youtube-dl`
 
+## Dependencies - Ubuntu
+
+  Nothing special on 18.04
+
 ## Configure and build
+
+Mac OSX
 
 ```
 export PKG_CONFIG_PATH=/s/QCODE/elv-toolchain/dist/darwin-10.14/lib/pkgconfig:/usr/local/Cellar/lua\@5.1/5.1.5_8/libexec/lib/pkgconfig
 ```
 
+Ubuntu
+
+```
+export PKG_CONFIG_PATH=/opt/eluvio/src/elv-toolchain/dist/linux-glibc.2.27/lib/pkgconfig
+```
+
 Install waf - run ./bootstrap.py
 
 ```
-./waf configure --disable-libass
+./waf configure --disable-libass --disable-lua
 
-./waf     # This builds ./build/mpv
+LD_RUN_PATH='$ORIGIN/../lib' RPATH='$ORIGIN/../lib' ./waf     # This builds ./build/mpv
 ```
 
-
 # Use it
+
+Ubuntu
+```
+export LD_LIBRARY_PATH=/opt/eluvio/src/elv-toolchain/dist/linux-glibc.2.27/lib
+```
 
 ```
 ./build/mpv http://lcoalhost:8008/...

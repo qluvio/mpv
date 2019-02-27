@@ -22,7 +22,7 @@ struct stats *gst;
 /*
  * Returns usec since epoch
  */
-static long long get_usec_now()
+static long long get_usec_now(void)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -37,7 +37,7 @@ static long long get_usec(struct stats *st)
     return get_usec_now() - st->start_usec;
 }
 
-static const char *basename(const char *f)
+static const char *urlbase(const char *f)
 {
     char *p = strrchr(f, '/');
     if (p) {
@@ -176,7 +176,7 @@ void stats_update_seg_open(struct stats *st, const char* url)
     mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN url=%s\n", url);
 
     /* get the segment info - manifest, init, audio/video and update current seg index in global struct */
-    const char* baseurl = basename(url);
+    const char* baseurl = urlbase(url);
 
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
@@ -216,7 +216,7 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
       mp_msg(st->log, MSGL_INFO, "ELVTRC NET READ off=%d size=%d url=%s\n", off, rsz, url);
 
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
-    const char* baseurl = basename(url);
+    const char* baseurl = urlbase(url);
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, baseurl);
@@ -224,7 +224,7 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
     if ( off == 0 )  { // First read of the segment
 
         long long ttfb = get_usec(st);
-        mp_msg(st->log, MSGL_INFO, "ELVTRC segment ttfb=%lld url=%s\n", ttfb, basename(url));
+        mp_msg(st->log, MSGL_INFO, "ELVTRC segment ttfb=%lld url=%s\n", ttfb, urlbase(url));
 
         if ( si_tmp.type == dash_video ) {
             st->segstats_video[si_tmp.index - 1].seg_first_buf_read_usec = ttfb;
@@ -245,7 +245,7 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
     }
 
     if (rsz <= 0) // EOF
-      mp_msg(st->log, MSGL_INFO, "ELVTRC segment tt=%lld url=%s\n", get_usec(st), basename(url));
+        mp_msg(st->log, MSGL_INFO, "ELVTRC segment tt=%lld url=%s\n", get_usec(st), urlbase(url));
 }
 
 void stats_update_seg_close(struct stats *st, const char* url)
@@ -253,14 +253,13 @@ void stats_update_seg_close(struct stats *st, const char* url)
     mp_msg(st->log, MSGL_INFO, "ELVTRC NET CLOSE url=%s\n", url);
 
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
-    const char* baseurl = basename(url);
+    const char* baseurl = urlbase(url);
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, baseurl);
 
     long long ttclose = get_usec(st);
-    mp_msg(st->log, MSGL_INFO, "ELVTRC segment close=%lld url=%s\n", ttclose, basename(url));
-
+    mp_msg(st->log, MSGL_INFO, "ELVTRC segment close=%lld url=%s\n", ttclose, urlbase(url));
 
     if (si_tmp.type == dash_video)  {
         st->segstats_video[si_tmp.index - 1].seg_close_usec = ttclose;
