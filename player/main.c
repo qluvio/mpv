@@ -444,10 +444,11 @@ int mpv_main(int argc, char *argv[])
 
     mpctx->is_cli = true;
 
-    stats_init(gst);
+    
 
     char **options = argv && argv[0] ? argv + 1 : NULL; // skips program name
     int r = mp_initialize(mpctx, options);
+    stats_init(gst, mpctx);
     if (r == 0)
         mp_play_files(mpctx);
 
@@ -482,9 +483,9 @@ int mpv_main(int argc, char *argv[])
     if (mpctx->has_quit_custom_rc)
         rc = mpctx->quit_custom_rc;
 
-    mp_destroy(mpctx);
-
     stats_finalize(gst);
+
+    mp_destroy(mpctx);
 
     return rc;
 }

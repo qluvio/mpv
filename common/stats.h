@@ -7,6 +7,11 @@
 
 /* stats for an individual segment */
 
+#include "common/av_log.h"
+#include "common/common.h"
+#include "common/msg.h"
+#include "player/core.h"
+
 typedef enum {
 
     dash_unset = -1,
@@ -69,6 +74,7 @@ struct stats {
     int curpacket_v;
     int curpacket_a;
 
+    struct mp_log *log;
     long long start_usec; // initialization time for structure
 
     long long seg_duration; // Todo - need to extract
@@ -89,7 +95,7 @@ struct stats {
 
 extern struct stats *gst;
 
-void stats_init(struct stats *st);
+void stats_init(struct stats *st, struct MPContext *mpctx);
 
 void segstats_init(struct segstats *ss);
 

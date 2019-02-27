@@ -41,21 +41,21 @@ static const char *basename(const char *f)
 {
     char *p = strrchr(f, '/');
     if (p) {
-        printf("ELVTRC: basename=%s\n", p + 1);
-        return p + 1;
+      return p + 1;
     }
     else
         return f;
 }
 
-void stats_init(struct stats *st)
+void stats_init(struct stats *st, struct MPContext *mpctx)
 {
     // Using a global stats singleton
     gst = &_gst;
     st = gst;
 
+    st->log = mpctx->log;
     st->start_usec = get_usec_now();
-    st->seg_duration = 6000000; // MM Todo - hard coded for now
+    st->seg_duration = 2002000; // MM Todo - hard coded for now
     st->curseg_a = st->curseg_v = -1;
     st->curpacket_a = st->curpacket_v = 0;
 
@@ -125,10 +125,10 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
     // Example urls: en.mpd, en-1080p@5120000-init.m4v, en-1080p@5120000-2.m4v
     // Parse on last "." and "-"
     char *suffix = strrchr(url, '.') + 1;
-    printf("ELVTRC URL_SEG_INFO suffix=%s\n", suffix);
+    mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO suffix=%s\n", suffix);
     if (strcmp(suffix,"mpd") == 0 || strcmp(suffix,"m3u8") == 0) {
         si->type=dash_manifest;
-        printf("ELVTRC URL_SEG_INFO dash_manifest\n");
+        mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_manifest\n");
     }
     else {
         char *seg_start = strrchr(url, '-') + 1;
@@ -136,7 +136,7 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
         char seg[1000];
         int length = seg_end - seg_start;
         int offset = seg_start - url;
-        printf("ELVRTC URL_SEG_INFO dash_segment: offset=%d length=%d\n", offset, length);
+        mp_msg(st->log, MSGL_INFO, "ELVRTC URL_SEG_INFO dash_segment: offset=%d length=%d\n", offset, length);
         int position = offset + 1;
         int c = 0;
         while ( c < length ) {
@@ -144,9 +144,9 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
             c++;
         }
         seg[c] = '\0';
-        printf("ELVTRC URL_SEG_INFO dash_segment: seg=%s\n", seg);
+        mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_segment: seg=%s\n", seg);
         if (strcmp(suffix,"m4v") == 0) {
-            printf("ELVTRC URL_SEG_INFO dash_video: seg=%s\n", seg);
+	  mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_video: seg=%s\n", seg);
             // init segment or regular?
             if (strcmp(seg, "init") == 0) {
                 si->type = dash_init_video;
@@ -158,7 +158,7 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
         }
         if (strcmp(suffix,"m4a") == 0) {
             // init segment or regular?
-            printf("ELVTRC URL_SEG_INFO dash_audio: seg=%s\n", seg);
+	  mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_audio: seg=%s\n", seg);
             if (strcmp(seg, "init") == 0) {
                 si->type = dash_init_audio;
             } else {
@@ -173,7 +173,7 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
 
 void stats_update_seg_open(struct stats *st, const char* url)
 {
-    printf("ELVTRC NET OPEN url=%s\n", url);
+    mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN url=%s\n", url);
 
     /* get the segment info - manifest, init, audio/video and update current seg index in global struct */
     const char* baseurl = basename(url);
@@ -181,7 +181,7 @@ void stats_update_seg_open(struct stats *st, const char* url)
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, baseurl);
-    printf("ELVTRC NET OPEN seginfo type=%d, index=%d", si_tmp.type, si_tmp.index);
+    mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN seginfo type=%d, index=%d", si_tmp.type, si_tmp.index);
 
     // TODO: Need to add audio segstats array
     long long open_usec = get_usec(st);
@@ -213,7 +213,7 @@ void stats_update_seg_open(struct stats *st, const char* url)
 void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
 {
     if (rsz > 0)
-        printf("ELVTRC NET READ off=%d size=%d url=%s\n", off, rsz, url);
+      mp_msg(st->log, MSGL_INFO, "ELVTRC NET READ off=%d size=%d url=%s\n", off, rsz, url);
 
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
     const char* baseurl = basename(url);
@@ -224,7 +224,7 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
     if ( off == 0 )  { // First read of the segment
 
         long long ttfb = get_usec(st);
-        printf("ELVTRC segment ttfb=%lld url=%s\n", ttfb, basename(url));
+        mp_msg(st->log, MSGL_INFO, "ELVTRC segment ttfb=%lld url=%s\n", ttfb, basename(url));
 
         if ( si_tmp.type == dash_video ) {
             st->segstats_video[si_tmp.index - 1].seg_first_buf_read_usec = ttfb;
@@ -245,12 +245,12 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
     }
 
     if (rsz <= 0) // EOF
-        printf("ELVTRC segment tt=%lld url=%s\n", get_usec(st), basename(url));
+      mp_msg(st->log, MSGL_INFO, "ELVTRC segment tt=%lld url=%s\n", get_usec(st), basename(url));
 }
 
 void stats_update_seg_close(struct stats *st, const char* url)
 {
-    printf("ELVTRC NET CLOSE url=%s\n", url);
+    mp_msg(st->log, MSGL_INFO, "ELVTRC NET CLOSE url=%s\n", url);
 
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
     const char* baseurl = basename(url);
@@ -259,7 +259,7 @@ void stats_update_seg_close(struct stats *st, const char* url)
     url_seg_info(st, &si_tmp, baseurl);
 
     long long ttclose = get_usec(st);
-    printf("ELVTRC segment close=%lld url=%s\n", ttclose, basename(url));
+    mp_msg(st->log, MSGL_INFO, "ELVTRC segment close=%lld url=%s\n", ttclose, basename(url));
 
 
     if (si_tmp.type == dash_video)  {
@@ -272,14 +272,14 @@ void stats_update_seg_close(struct stats *st, const char* url)
         st->segstats_audio_init.seg_close_usec = ttclose;
     }
 
-    printf("ELVTRC NET CLOSE exit.\n");
+    mp_msg(st->log, MSGL_INFO, "ELVTRC NET CLOSE exit.\n");
 
 }
 
 void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     int seg_index, double seg_start, double seg_end, double seg_dstart)
 {
-    printf("ELVTRACE DMUX PKT - enter\n");
+  mp_msg(st->log, MSGL_INFO, "ELVTRACE DMUX PKT - enter\n");
     if  ( pts < 0 ) {
         return;
     }
@@ -299,8 +299,8 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     if (pi_tmp.type == packet_video) {
         pi_tmp.packet_index = st->curpacket_v;
         if (st->curpacket_v == 0 && seg_index == 0) {
-            printf("ELVTRC DEMUX PKT: first packet of first segment! %lld\n", dmux_usec);
-            st->first_packet_decode_usec = dmux_usec;
+	  mp_msg(st->log, MSGL_INFO, "ELVTRC DEMUX PKT: first packet of first segment! %lld\n", dmux_usec);
+	  st->first_packet_decode_usec = dmux_usec;
         }
         st->curpacket_v += 1;
         ps = &(st->packetstats_video[pi_tmp.packet_index]);
@@ -312,7 +312,7 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     ps->packet_dmux_usec = dmux_usec;
     ps->packetinfo = pi_tmp;
 
-    printf("ELVTRC DEMUX PKT type=%d sos=%d eos=%d packet_index=%d pts=%f seg_index=%d seg_start=%f seg_end=%f seg_dstart=%f dmux_usec=%lld first=%lld\n",
+    mp_msg(st->log, MSGL_INFO, "ELVTRC DEMUX PKT type=%d sos=%d eos=%d packet_index=%d pts=%f seg_index=%d seg_start=%f seg_end=%f seg_dstart=%f dmux_usec=%lld first=%lld\n",
         type, sos, eos, ps->packetinfo.packet_index, pts, seg_index, seg_start, seg_end, seg_dstart, dmux_usec, st->first_packet_decode_usec);
 
 }
@@ -355,7 +355,7 @@ void stats_finalize(struct stats *st)
     video_init_tt =  st->segstats_video_init.seg_close_usec - st->segstats_video_init.seg_open_usec;
     audio_init_tt = st->segstats_audio_init.seg_close_usec - st->segstats_audio_init.seg_open_usec;
 
-    printf("manifest ttfb=%lld tt=%lld video_init ttfb=%lld tt=%lld audio_init_ttfb=%lld audio_init_tt=%lld\n", manifest_ttfb, manifest_tt, video_init_ttfb, video_init_tt, audio_init_ttfb, audio_init_tt);
+    mp_msg(st->log, MSGL_INFO, "manifest ttfb=%lld tt=%lld video_init ttfb=%lld tt=%lld audio_init_ttfb=%lld audio_init_tt=%lld\n", manifest_ttfb, manifest_tt, video_init_ttfb, video_init_tt, audio_init_ttfb, audio_init_tt);
 
     // SEGMENTS
     long long play_time = 0;
@@ -369,7 +369,7 @@ void stats_finalize(struct stats *st)
         play_time = t1 + st->seg_duration * i;
         ahead_of_play_time = play_time - st->segstats_video[i].seg_close_usec;
         latency = st->segstats_video[i].seg_close_usec - t0; 
-        printf("ELVTRC SEG %d time_to_first_buf=%lld total_time=%lld expected_play_time=%lld ahead_time=%lld latency=%lld\n", i, segment_ttfb, segment_tt, play_time, ahead_of_play_time, latency);
+        mp_msg(st->log, MSGL_INFO, "ELVTRC SEG %d time_to_first_buf=%lld total_time=%lld expected_play_time=%lld ahead_time=%lld latency=%lld\n", i, segment_ttfb, segment_tt, play_time, ahead_of_play_time, latency);
 
     }
 
@@ -411,7 +411,7 @@ void stats_finalize(struct stats *st)
 
         latency = st->packetstats_video[j].packet_dmux_usec - t0;
 
-        printf("ELVTRC FR %d seg=%d play_time=%lld ahead_time=%lld decode_time=%lld latency=%lld\n", j, this_segment_index, play_time, ahead_of_play_time, decode_time, latency);
+        mp_msg(st->log, MSGL_INFO, "ELVTRC FR %d seg=%d play_time=%lld ahead_time=%lld decode_time=%lld latency=%lld\n", j, this_segment_index, play_time, ahead_of_play_time, decode_time, latency);
 
     }
 
