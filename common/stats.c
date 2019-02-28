@@ -173,7 +173,7 @@ void stats_update_seg_open(struct stats *st, const char* url)
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, url);
-    mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN seginfo type=%d, index=%d", si_tmp.type, si_tmp.index);
+    mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN seginfo type=%d, index=%d\n", si_tmp.type, si_tmp.index);
 
     // TODO: Need to add audio segstats array
     long long open_usec = get_usec(st);
@@ -195,6 +195,9 @@ void stats_update_seg_open(struct stats *st, const char* url)
     }  else if ( si_tmp.type == dash_init_video ) {
         st->segstats_video_init = ss_tmp;
         st->init_seg_video_open_usec = open_usec;
+        /* Calculate player overhead when opening init segment */
+        st->player_overhead = open_usec - st->segstats_manifest.seg_close_usec;
+        mp_msg(st->log, MSGL_INFO, "ELVTRC PLAYER OVERHEAD %lld\n", st->player_overhead);
     }  else if ( si_tmp.type == dash_init_audio ) {
         st->segstats_audio_init = ss_tmp;
         st->init_seg_audio_open_usec = open_usec;
@@ -309,7 +312,6 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
 
 }
 
-
 long long to_usec( double d ) {
 
     long long l = d * 1000000;
@@ -317,27 +319,41 @@ long long to_usec( double d ) {
 
 }
 
+static void legend(struct stats *st) {
+    mp_msg(st->log, MSGL_INFO, "ELVSTATS LEGEND\n");
+
+    mp_msg(st->log, MSGL_INFO, "- manifest ttfb and tt:     relative to manifest request\n");
+    mp_msg(st->log, MSGL_INFO, "- init segment ttfb and tt: relative to own request\n");
+    mp_msg(st->log, MSGL_INFO, "- segment ttfb and tt rel:  relative to own segment request time\n");
+    mp_msg(st->log, MSGL_INFO, "- segment ttfb and tt:      relative to first segment request time\n");
+    mp_msg(st->log, MSGL_INFO, "- exp_play_time:     relative to program start\n");
+    mp_msg(st->log, MSGL_INFO, "- exp_play_time_adj: adjusted for player overhead\n");
+    mp_msg(st->log, MSGL_INFO, "- ahead_time:        time ready before expected play time (or after if negative)\n");
+    mp_msg(st->log, MSGL_INFO, "- latency:           arrival time since beginning of program adjusted for overhead\n");
+}
+
 void stats_finalize(struct stats *st)
 {
+    legend(st);
 
     long long t0 = st->manifest_open_usec;
     long long t1 = st->first_seg_open_usec;
     long long t2 = st->first_packet_decode_usec;
 
-    long long setup_time =
-        st->init_seg_video_open_usec > st->init_seg_audio_open_usec ?  st->init_seg_video_open_usec : st->init_seg_audio_open_usec;
-    setup_time = setup_time > st->manifest_open_usec ? setup_time : st->manifest_open_usec;
+    long long t0adj = t0 + st->player_overhead; // t0 adjusted for player overhead
 
     int i = 0;
 
     long long manifest_ttfb = 0;
     long long video_init_ttfb = 0;
     long long audio_init_ttfb = 0;
-    long long segment_ttfb = 0; // time of first read relative to this segment's request time
+    long long segment_ttfb = 0; // time of first read relative to first segment's request time
+    long long segment_ttfb_rel = 0; // relative to this segment's request time
     long long manifest_tt = 0;
     long long video_init_tt = 0;
     long long audio_init_tt = 0;
     long long segment_tt = 0; // time of last read relative to this segment's request time
+    long long segment_tt_rel = 0; // relative to this segment's request time
 
     manifest_ttfb = st->segstats_manifest.seg_first_buf_read_usec - st->segstats_manifest.seg_open_usec;
     video_init_ttfb =  st->segstats_video_init.seg_first_buf_read_usec - st->segstats_video_init.seg_open_usec;
@@ -347,22 +363,32 @@ void stats_finalize(struct stats *st)
     video_init_tt =  st->segstats_video_init.seg_close_usec - st->segstats_video_init.seg_open_usec;
     audio_init_tt = st->segstats_audio_init.seg_close_usec - st->segstats_audio_init.seg_open_usec;
 
-    mp_msg(st->log, MSGL_INFO, "manifest ttfb=%lld tt=%lld video_init ttfb=%lld tt=%lld audio_init_ttfb=%lld audio_init_tt=%lld\n", manifest_ttfb, manifest_tt, video_init_ttfb, video_init_tt, audio_init_ttfb, audio_init_tt);
+    mp_msg(st->log, MSGL_INFO,
+        "ELVSTATS MANIFEST ttfb=%lld tt=%lld video_init ttfb=%lld tt=%lld audio_init_ttfb=%lld audio_init_tt=%lld\n",
+        manifest_ttfb, manifest_tt, video_init_ttfb, video_init_tt, audio_init_ttfb, audio_init_tt);
 
-    // SEGMENTS
-    long long play_time = 0;
-    long long ahead_of_play_time = 0;
+    long long play_time = 0; // time when the frame is supposed to be played
+                             // for segment is the time the segment is supposed to be received
+    long long play_time_adj = 0; // adjusted for player overhead
+    long long ahead_of_play_time = 0; // can be negative if not keeping up
     long long latency = 0;
 
+    // SEGMENTS
     for ( i = 0; i < st->curseg_v; i++ ) {
 
         segment_ttfb = st->segstats_video[i].seg_first_buf_read_usec - st->segstats_video[0].seg_open_usec;
         segment_tt =  st->segstats_video[i].seg_close_usec - st->segstats_video[0].seg_open_usec;
+        segment_ttfb_rel = st->segstats_video[i].seg_first_buf_read_usec - st->segstats_video[i].seg_open_usec;
+        segment_tt_rel =  st->segstats_video[i].seg_close_usec - st->segstats_video[i].seg_open_usec;
         play_time = t1 + st->seg_duration * i;
+        play_time_adj = play_time - st->player_overhead; // adjusted for player overhead
         ahead_of_play_time = play_time - st->segstats_video[i].seg_close_usec;
-        latency = st->segstats_video[i].seg_close_usec - t0; 
-        mp_msg(st->log, MSGL_INFO, "ELVTRC SEG %d time_to_first_buf=%lld total_time=%lld expected_play_time=%lld ahead_time=%lld latency=%lld\n", i, segment_ttfb, segment_tt, play_time, ahead_of_play_time, latency);
-
+        latency = st->segstats_video[i].seg_close_usec - t0adj;
+        mp_msg(st->log, MSGL_INFO,
+            "ELVSTATS SEG %d ttfb=%lld tt=%lld ttfb_rel=%lld tt_rel=%lld "
+            "exp_play_time=%lld exp_play_time_adj=%lld ahead_time=%lld latency=%lld\n",
+            i, segment_ttfb, segment_tt, segment_ttfb_rel, segment_tt_rel,
+            play_time, play_time_adj, ahead_of_play_time, latency);
     }
 
     // FRAMES ("PACKETS")
@@ -392,7 +418,7 @@ void stats_finalize(struct stats *st)
 
         // printf("MMSEG this_pts %f %lld\n", this_pts, to_usec(this_pts));
 
-        play_time =  t2 + to_usec(this_pts);
+        play_time = t2 + to_usec(this_pts);
 
         // printf("MMSEG play_time %lld = %lld + %lld\n", play_time, t2, to_usec(this_pts));
 
@@ -404,12 +430,10 @@ void stats_finalize(struct stats *st)
             decode_time =  st->packetstats_video[0].packet_dmux_usec - t2;
         }
 
-        latency = st->packetstats_video[j].packet_dmux_usec - t0;
+        latency = st->packetstats_video[j].packet_dmux_usec - t0adj;
 
-        mp_msg(st->log, MSGL_INFO, "ELVTRC FR %d seg=%d play_time=%lld ahead_time=%lld decode_time=%lld latency=%lld\n", j, this_segment_index, play_time, ahead_of_play_time, decode_time, latency);
-
+        mp_msg(st->log, MSGL_INFO,
+            "ELVSTATS FRAME %d seg=%d play_time=%lld ahead_time=%lld decode_time=%lld latency=%lld\n",
+            j, this_segment_index, play_time, ahead_of_play_time, decode_time, latency);
     }
-
 }
-
-

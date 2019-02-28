@@ -4,12 +4,18 @@
 
 ## Dependencies - Mac OSX
 
-  `brew install lua@5.1`  # Will work without when using --disable-lua
+  `brew install lua@5.1`
   `brew install youtube-dl`
 
 ## Dependencies - Ubuntu
 
-  Nothing special on 18.04
+  ` apt install \
+      lua5.1 \
+      luajit \
+      liblua5.1-dev \
+      libluajit-5.1-dev \
+      youtube-dl
+  `
 
 ## Configure and build
 
