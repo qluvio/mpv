@@ -131,21 +131,15 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
         mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_manifest\n");
     }
     else {
-        char *seg_start = strrchr(url, '-') + 1;
+        char *seg_start = strrchr(url, '/') + 1;
         char *seg_end = strchr(seg_start, '.');
         char seg[1000];
         int length = seg_end - seg_start;
-        int offset = seg_start - url;
-        mp_msg(st->log, MSGL_INFO, "ELVRTC URL_SEG_INFO dash_segment: offset=%d length=%d\n", offset, length);
-        int position = offset + 1;
-        int c = 0;
-        while ( c < length ) {
-            seg[c] = url[position+c-1];
-            c++;
-        }
-        seg[c] = '\0';
+
+	memcpy(seg, seg_start, length);
+        seg[length] = '\0';
         mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_segment: seg=%s\n", seg);
-        if (strcmp(suffix,"m4v") == 0) {
+        if (strstr(url,"video")) {
 	  mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_video: seg=%s\n", seg);
             // init segment or regular?
             if (strcmp(seg, "init") == 0) {
@@ -156,7 +150,7 @@ void url_seg_info(struct stats *st, struct seginfo *si, const char* url)
                 st->curseg_a = si->index; // set current seg counter in global
             }
         }
-        if (strcmp(suffix,"m4a") == 0) {
+        if (strstr(url,"audio")) {
             // init segment or regular?
 	  mp_msg(st->log, MSGL_INFO, "ELVTRC URL_SEG_INFO dash_audio: seg=%s\n", seg);
             if (strcmp(seg, "init") == 0) {
@@ -176,11 +170,9 @@ void stats_update_seg_open(struct stats *st, const char* url)
     mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN url=%s\n", url);
 
     /* get the segment info - manifest, init, audio/video and update current seg index in global struct */
-    const char* baseurl = urlbase(url);
-
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
-    url_seg_info(st, &si_tmp, baseurl);
+    url_seg_info(st, &si_tmp, url);
     mp_msg(st->log, MSGL_INFO, "ELVTRC NET OPEN seginfo type=%d, index=%d", si_tmp.type, si_tmp.index);
 
     // TODO: Need to add audio segstats array
@@ -216,10 +208,9 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
       mp_msg(st->log, MSGL_INFO, "ELVTRC NET READ off=%d size=%d url=%s\n", off, rsz, url);
 
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
-    const char* baseurl = urlbase(url);
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
-    url_seg_info(st, &si_tmp, baseurl);
+    url_seg_info(st, &si_tmp, url);
 
     if ( off == 0 )  { // First read of the segment
 
@@ -236,7 +227,7 @@ void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
             st->segstats_video_init.seg_first_buf_read_usec = ttfb;
         }
         else if ( si_tmp.type == dash_init_audio )  {
-            st->segstats_video_init.seg_first_buf_read_usec = ttfb;
+            st->segstats_audio_init.seg_first_buf_read_usec = ttfb;
         }
 
         if ( si_tmp.index - 1 == 0 ) { // first segment, first buf read
@@ -253,10 +244,9 @@ void stats_update_seg_close(struct stats *st, const char* url)
     mp_msg(st->log, MSGL_INFO, "ELVTRC NET CLOSE url=%s\n", url);
 
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
-    const char* baseurl = urlbase(url);
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
-    url_seg_info(st, &si_tmp, baseurl);
+    url_seg_info(st, &si_tmp, url);
 
     long long ttclose = get_usec(st);
     mp_msg(st->log, MSGL_INFO, "ELVTRC segment close=%lld url=%s\n", ttclose, urlbase(url));
@@ -278,7 +268,6 @@ void stats_update_seg_close(struct stats *st, const char* url)
 void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     int seg_index, double seg_start, double seg_end, double seg_dstart)
 {
-  mp_msg(st->log, MSGL_INFO, "ELVTRACE DMUX PKT - enter\n");
     if  ( pts < 0 ) {
         return;
     }
@@ -286,7 +275,11 @@ void stats_update_demux(struct stats *st, int type, int sos, int eos, float pts,
     struct packetinfo pi_tmp;
     packetinfo_init(&pi_tmp);
     long long dmux_usec = get_usec(st);
-    pi_tmp.type = type;
+    if ( type == STREAM_VIDEO ) {
+      pi_tmp.type = packet_video;
+    } else if ( type == STREAM_AUDIO ) {
+      pi_tmp.type = packet_audio;
+    }
     pi_tmp.seg_index = seg_index;
     pi_tmp.start_of_segment = sos;
     pi_tmp.end_of_segment = eos;
@@ -392,7 +385,10 @@ void stats_finalize(struct stats *st)
 
         this_segment_index = st->packetstats_video[j].packetinfo.seg_index;
 
-        this_pts = st->packetstats_video[j].packetinfo.seg_start + st->packetstats_video[j].packetinfo.pts;
+        // If pts starts at 0 every segment we need to add the segment start pts.
+        // Initial tests had the pts starting at 0 but testing with avpipe has pts continuing from prev segment
+        // this_pts = st->packetstats_video[j].packetinfo.seg_start + st->packetstats_video[j].packetinfo.pts;
+        this_pts = st->packetstats_video[j].packetinfo.pts;
 
         // printf("MMSEG this_pts %f %lld\n", this_pts, to_usec(this_pts));
 
