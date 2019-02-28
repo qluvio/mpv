@@ -89,8 +89,15 @@ struct stats {
     long long first_seg_open_usec; // this becomes t1
     long long first_buf_read_usec;
     long long first_packet_decode_usec; // this becomes t2
+
     struct packetstats packetstats_video[1000 * 1000]; // packets are actually "frames" in video; nothing to do with network
     struct packetstats packetstats_audio[1000 * 1000];
+
+    /*
+     * MPV initializes its DASH subsystem after receiving the manifest which takes a long time (around 3 sec)
+     * Player overhead = time to open first init segment - time manifest received
+     */
+    long long player_overhead;
 };
 
 extern struct stats *gst;
