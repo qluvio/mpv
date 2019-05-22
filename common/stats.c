@@ -7,6 +7,7 @@
 
 #include <sys/time.h>
 #include <stdio.h>
+#include <string.h>
 
 // Global stats structure
 struct stats _gst;
@@ -72,6 +73,8 @@ void segstats_init(struct segstats *ss)
     ss->seg_open_usec = 0;
     ss->seg_first_buf_read_usec = 0;
     ss->seg_close_usec = 0;
+    ss->seg_size = 0;
+    ss->seg_url = "";
     seginfo_init(&ss->seginfo);
 }
 
@@ -207,21 +210,24 @@ void stats_update_seg_open(struct stats *st, const char* url)
 
 void stats_update_seg_read(struct stats *st, const char* url, int off, int rsz)
 {
-    if (rsz > 0)
-      mp_msg(st->log, MSGL_INFO, "ELVTRC NET READ off=%d size=%d url=%s\n", off, rsz, url);
-
     /* get segment info - manifest, init, audio/video and update current seg index in global struct */
     struct seginfo si_tmp;
     seginfo_init(&si_tmp);
     url_seg_info(st, &si_tmp, url);
 
-    if ( off == 0 )  { // First read of the segment
-
+    if (rsz > 0) { // First readof the segment
+        mp_msg(st->log, MSGL_INFO, "ELVTRC NET READ off=%d size=%d url=%s\n", off, rsz, url);
         long long ttfb = get_usec(st);
-        mp_msg(st->log, MSGL_INFO, "ELVTRC segment ttfb=%lld url=%s\n", ttfb, urlbase(url));
 
         if ( si_tmp.type == dash_video ) {
-            st->segstats_video[si_tmp.index - 1].seg_first_buf_read_usec = ttfb;
+            st->segstats_video[si_tmp.index - 1].seg_size += rsz;
+            st->segstats_video[si_tmp.index - 1].seg_url = strdup(url);
+
+            if ( off == 0 )  { // First read of the segment
+                st->segstats_video[si_tmp.index - 1].seg_first_buf_read_usec = ttfb;
+            }
+
+            mp_msg(st->log, MSGL_INFO, "ELVTRC segment ttfb=%lld url=%s cum_sz=%lld\n", st->segstats_video[si_tmp.index - 1].seg_first_buf_read_usec, urlbase(st->segstats_video[si_tmp.index -1].seg_url), st->segstats_video[si_tmp.index - 1].seg_size);
         }
         else if ( si_tmp.type == dash_manifest )  {
             st->segstats_manifest.seg_first_buf_read_usec = ttfb;
@@ -354,7 +360,8 @@ void stats_finalize(struct stats *st)
     long long audio_init_tt = 0;
     long long segment_tt = 0; // time of last read relative to this segment's request time
     long long segment_tt_rel = 0; // relative to this segment's request time
-
+    long long segment_size = 0;
+    const char* url = "";
     manifest_ttfb = st->segstats_manifest.seg_first_buf_read_usec - st->segstats_manifest.seg_open_usec;
     video_init_ttfb =  st->segstats_video_init.seg_first_buf_read_usec - st->segstats_video_init.seg_open_usec;
     audio_init_ttfb = st->segstats_audio_init.seg_first_buf_read_usec - st->segstats_audio_init.seg_open_usec;
@@ -372,6 +379,8 @@ void stats_finalize(struct stats *st)
     long long play_time_adj = 0; // adjusted for player overhead
     long long ahead_of_play_time = 0; // can be negative if not keeping up
     long long latency = 0;
+    const char* client_id = getenv("CLIENT_ID");
+    mp_msg(st->log, MSGL_INFO, "CLIENT_ID :%s\n", (client_id!=NULL)? client_id : "getenv returned NULL");
 
     // SEGMENTS
     for ( i = 0; i < st->curseg_v; i++ ) {
@@ -380,15 +389,38 @@ void stats_finalize(struct stats *st)
         segment_tt =  st->segstats_video[i].seg_close_usec - st->segstats_video[0].seg_open_usec;
         segment_ttfb_rel = st->segstats_video[i].seg_first_buf_read_usec - st->segstats_video[i].seg_open_usec;
         segment_tt_rel =  st->segstats_video[i].seg_close_usec - st->segstats_video[i].seg_open_usec;
+        segment_size = st->segstats_video[i].seg_size;
+        url = st->segstats_video[i].seg_url;
+        mp_msg(st->log, MSGL_INFO, "ELVSTATS SEG url %s %lld\n", url, segment_size); 
         play_time = t1 + st->seg_duration * i;
         play_time_adj = play_time - st->player_overhead; // adjusted for player overhead
         ahead_of_play_time = play_time - st->segstats_video[i].seg_close_usec;
         latency = st->segstats_video[i].seg_close_usec - t0adj;
+
+        time_t current_time;
+        char* c_time_string;
+        current_time = time(NULL);
+
+        if (current_time == ((time_t)-1)) {
+            mp_msg(st->log, MSGL_INFO, "Failure to obtain the current time.\n");
+        }
+
+        /* Convert to local time format. */
+        c_time_string = ctime(&current_time);
+        c_time_string[strlen(c_time_string)-1] = '\0';
+        if (c_time_string == NULL) {
+            mp_msg(st->log, MSGL_INFO, "Failure to convert the currenttime.\n");
+        }
+
         mp_msg(st->log, MSGL_INFO,
             "ELVSTATS SEG %d ttfb=%lld tt=%lld ttfb_rel=%lld tt_rel=%lld "
             "exp_play_time=%lld exp_play_time_adj=%lld ahead_time=%lld latency=%lld\n",
             i, segment_ttfb, segment_tt, segment_ttfb_rel, segment_tt_rel,
             play_time, play_time_adj, ahead_of_play_time, latency);
+
+        // CID: 1bed634c08621595627b5b5577016ce266cd46917937f77426ecfed456c5e15a URL: http://35.194.222.184/qparts/hqp_QmZ22R3RhRMQ9YCUAGhk6dpQhXRkgPyvtHskayYdz52j9U, TTFB: 5.181298,  TTFS: XXXXX, BW: 0.989438, TIME: 2018/08/06 08:23:28, CFTRACE: 9896e8034076fe75519c09a9f9c39a1e0703d423153cbde18d9f0c88c4c41cc3#35.198.38.201:80#1533569008537233368#0#0#1533569012934482647
+        mp_msg(st->log, MSGL_INFO, "CID: %s URL: %s, TTFB: %0.6f, BW: %0.6f, TTFS: %0.6f, TIME: %s, CFTRACE: ##0#0#0#0\n", client_id, url, segment_ttfb_rel/1000000.0, segment_size*1.0/segment_tt_rel, segment_tt_rel/1000000.0, c_time_string);
+        free((void*)st->segstats_video[i].seg_url);
     }
 
     // FRAMES ("PACKETS")

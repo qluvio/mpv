@@ -56,6 +56,8 @@ struct segstats {
     long long seg_open_usec; // MM: Todo - need to add audio; these are all for video
     long long seg_first_buf_read_usec;
     long long seg_close_usec;
+    long long seg_size;
+    const char* seg_url;
     struct seginfo seginfo;
 };
 
