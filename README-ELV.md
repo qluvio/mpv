@@ -31,10 +31,10 @@ Ubuntu
 export PKG_CONFIG_PATH=/opt/eluvio/src/elv-toolchain/dist/linux-glibc.2.27/lib/pkgconfig
 ```
 
-Install waf - run ./bootstrap.py
+Install waf if not installed - run `./bootstrap.py`
 
 ```
-./waf configure --disable-libass --disable-lua
+./waf configure --disable-libass
 
 LD_RUN_PATH='$ORIGIN/../lib' RPATH='$ORIGIN/../lib' ./waf     # This builds ./build/mpv
 ```
