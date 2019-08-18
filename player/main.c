@@ -28,6 +28,7 @@
 #include "mpv_talloc.h"
 
 #include "misc/dispatch.h"
+#include "misc/thread_pool.h"
 #include "osdep/io.h"
 #include "osdep/terminal.h"
 #include "osdep/timer.h"
@@ -54,7 +55,7 @@
 
 #include "audio/out/ao.h"
 #include "demux/demux.h"
-#include "stream/stream.h"
+#include "misc/thread_tools.h"
 #include "sub/osd.h"
 #include "video/out/vo.h"
 
@@ -117,7 +118,7 @@ void mp_update_logging(struct MPContext *mpctx, bool preinit)
 {
     bool had_log_file = mp_msg_has_log_file(mpctx->global);
 
-    mp_msg_update_msglevels(mpctx->global);
+    mp_msg_update_msglevels(mpctx->global, mpctx->opts);
 
     bool enable = mpctx->opts->use_terminal;
     bool enabled = cas_terminal_owner(mpctx, mpctx);
@@ -189,7 +190,9 @@ void mp_destroy(struct MPContext *mpctx)
     uninit_libav(mpctx->global);
 
     mp_msg_uninit(mpctx->global);
-    pthread_mutex_destroy(&mpctx->lock);
+    assert(!mpctx->num_abort_list);
+    talloc_free(mpctx->abort_list);
+    pthread_mutex_destroy(&mpctx->abort_lock);
     talloc_free(mpctx);
 }
 
@@ -220,7 +223,9 @@ static bool handle_help_options(struct MPContext *mpctx)
         MP_INFO(mpctx, "\n");
         return true;
     }
-    if (opts->audio_device && strcmp(opts->audio_device, "help") == 0) {
+    if (opts->ao_opts->audio_device &&
+        strcmp(opts->ao_opts->audio_device, "help") == 0)
+    {
         ao_print_devices(mpctx->global, log);
         return true;
     }
@@ -240,12 +245,6 @@ static int cfg_include(void *ctx, char *filename, int flags)
     int r = m_config_parse_config_file(mpctx->mconfig, fname, NULL, flags);
     talloc_free(fname);
     return r;
-}
-
-static void abort_playback_cb(void *ctx)
-{
-    struct MPContext *mpctx = ctx;
-    mp_abort_playback_async(mpctx);
 }
 
 // We mostly care about LC_NUMERIC, and how "." vs. "," is treated,
@@ -280,9 +279,11 @@ struct MPContext *mp_create(void)
         .playlist = talloc_struct(mpctx, struct playlist, {0}),
         .dispatch = mp_dispatch_create(mpctx),
         .playback_abort = mp_cancel_new(mpctx),
+        .thread_pool = mp_thread_pool_create(mpctx, 0, 1, 30),
+        .stop_play = PT_STOP,
     };
 
-    pthread_mutex_init(&mpctx->lock, NULL);
+    pthread_mutex_init(&mpctx->abort_lock, NULL);
 
     mpctx->global = talloc_zero(mpctx, struct mpv_global);
 
@@ -303,8 +304,6 @@ struct MPContext *mp_create(void)
     m_config_parse(mpctx->mconfig, "", bstr0(def_config), NULL, 0);
     m_config_create_shadow(mpctx->mconfig);
 
-    mpctx->global->opts = mpctx->opts;
-
     mpctx->input = mp_input_init(mpctx->global, mp_wakeup_core_cb, mpctx);
     screenshot_init(mpctx);
     command_init(mpctx);
@@ -315,8 +314,6 @@ struct MPContext *mp_create(void)
 #if HAVE_COCOA
     cocoa_set_input_context(mpctx->input);
 #endif
-
-    mp_input_set_cancel(mpctx->input, abort_playback_cb, mpctx);
 
     char *verbose_env = getenv("MPV_VERBOSE");
     if (verbose_env)
@@ -337,9 +334,12 @@ int mp_initialize(struct MPContext *mpctx, char **options)
     assert(!mpctx->initialized);
 
     // Preparse the command line, so we can init the terminal early.
-    if (options)
-        m_config_preparse_command_line(mpctx->mconfig, mpctx->global, options);
+    if (options) {
+        m_config_preparse_command_line(mpctx->mconfig, mpctx->global,
+                                       &opts->verbose, options);
+    }
 
+    mp_init_paths(mpctx->global, opts);
     mp_update_logging(mpctx, true);
 
     if (options) {

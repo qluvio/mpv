@@ -25,6 +25,7 @@
 #include "common/tags.h"
 #include "common/av_common.h"
 #include "common/stats.h"
+#include "misc/thread_tools.h"
 #include "stream.h"
 #include "options/m_config.h"
 #include "options/m_option.h"

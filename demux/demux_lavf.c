@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2004 Michael Niedermayer <michaelni@gmx.at>
+ * Copyright (C) 2018 Google LLC
  *
  * This file is part of mpv.
  *
@@ -42,6 +43,7 @@
 #include "common/av_common.h"
 #include "misc/bstr.h"
 #include "misc/charset_conv.h"
+#include "misc/thread_tools.h"
 
 #include "stream/stream.h"
 #include "demux.h"
@@ -190,6 +192,11 @@ static const struct format_hack format_hacks[] = {
     {0}
 };
 
+struct nested_stream {
+    AVIOContext *id;
+    int64_t last_bytes;
+};
+
 typedef struct lavf_priv {
     struct stream *stream;
     bool own_stream;
@@ -209,7 +216,28 @@ typedef struct lavf_priv {
 
     struct demux_lavf_opts *opts;
     double mf_fps;
+
+    // Proxying nested streams.
+    struct nested_stream *nested;
+    int num_nested;
+    int (*default_io_open)(struct AVFormatContext *s, AVIOContext **pb,
+                           const char *url, int flags, AVDictionary **options);
+    void (*default_io_close)(struct AVFormatContext *s, AVIOContext *pb);
 } lavf_priv_t;
+
+static void update_read_stats(struct demuxer *demuxer)
+{
+    lavf_priv_t *priv = demuxer->priv;
+
+    for (int n = 0; n < priv->num_nested; n++) {
+        struct nested_stream *nest = &priv->nested[n];
+
+        int64_t cur = nest->id->bytes_read;
+        int64_t new = cur - nest->last_bytes;
+        nest->last_bytes = cur;
+        demuxer->total_unbuffered_read_bytes += new;
+    }
+}
 
 // At least mp4 has name="mov,mp4,m4a,3gp,3g2,mj2", so we split the name
 // on "," in general.
@@ -561,17 +589,27 @@ static void export_replaygain(demuxer_t *demuxer, struct sh_stream *sh,
         av_rgain = (AVReplayGain*)src_sd->data;
         rgain    = talloc_ptrtype(demuxer, rgain);
 
-        rgain->track_gain = (av_rgain->track_gain != INT32_MIN) ?
-            av_rgain->track_gain / 100000.0f : 0.0;
+        // Set values in *rgain, using track gain as a fallback for album gain
+        // if the latter is not present. This behavior matches that in
+        // demux/demux.c's decode_rgain; if you change this, please make
+        // equivalent changes there too.
+        if (av_rgain->track_gain != INT32_MIN && av_rgain->track_peak != 0.0) {
+            // Track gain is defined.
+            rgain->track_gain = av_rgain->track_gain / 100000.0f;
+            rgain->track_peak = av_rgain->track_peak / 100000.0f;
 
-        rgain->track_peak = (av_rgain->track_peak != 0.0) ?
-            av_rgain->track_peak / 100000.0f : 1.0;
-
-        rgain->album_gain = (av_rgain->album_gain != INT32_MIN) ?
-            av_rgain->album_gain / 100000.0f : 0.0;
-
-        rgain->album_peak = (av_rgain->album_peak != 0.0) ?
-            av_rgain->album_peak / 100000.0f : 1.0;
+            if (av_rgain->album_gain != INT32_MIN &&
+                av_rgain->album_peak != 0.0)
+            {
+                // Album gain is also defined.
+                rgain->album_gain = av_rgain->album_gain / 100000.0f;
+                rgain->album_peak = av_rgain->album_peak / 100000.0f;
+            } else {
+                // Album gain is undefined; fall back to track gain.
+                rgain->album_gain = rgain->track_gain;
+                rgain->album_peak = rgain->track_peak;
+            }
+        }
 
         // This must be run only before the stream was added, otherwise there
         // will be race conditions with accesses from the user thread.
@@ -781,8 +819,7 @@ static void update_metadata(demuxer_t *demuxer)
 static int interrupt_cb(void *ctx)
 {
     struct demuxer *demuxer = ctx;
-    lavf_priv_t *priv = demuxer->priv;
-    return mp_cancel_test(priv->stream->cancel);
+    return mp_cancel_test(demuxer->cancel);
 }
 
 static int block_io_open(struct AVFormatContext *s, AVIOContext **pb,
@@ -791,6 +828,38 @@ static int block_io_open(struct AVFormatContext *s, AVIOContext **pb,
     struct demuxer *demuxer = s->opaque;
     MP_ERR(demuxer, "Not opening '%s' due to --access-references=no.\n", url);
     return AVERROR(EACCES);
+}
+
+static int nested_io_open(struct AVFormatContext *s, AVIOContext **pb,
+                          const char *url, int flags, AVDictionary **options)
+{
+    struct demuxer *demuxer = s->opaque;
+    lavf_priv_t *priv = demuxer->priv;
+
+    int r = priv->default_io_open(s, pb, url, flags, options);
+    if (r >= 0) {
+        struct nested_stream nest = {
+            .id = *pb,
+        };
+        MP_TARRAY_APPEND(priv, priv->nested, priv->num_nested, nest);
+    }
+    return r;
+}
+
+static void nested_io_close(struct AVFormatContext *s, AVIOContext *pb)
+{
+    struct demuxer *demuxer = s->opaque;
+    lavf_priv_t *priv = demuxer->priv;
+
+    for (int n = 0; n < priv->num_nested; n++) {
+        if (priv->nested[n].id == pb) {
+            MP_TARRAY_REMOVE_AT(priv->nested, priv->num_nested, n);
+            break;
+        }
+    }
+
+
+    priv->default_io_close(s, pb);
 }
 
 static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
@@ -887,8 +956,14 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
     };
 
     avfc->opaque = demuxer;
-    if (!demuxer->access_references)
+    if (demuxer->access_references) {
+        priv->default_io_open = avfc->io_open;
+        priv->default_io_close = avfc->io_close;
+        avfc->io_open = nested_io_open;
+        avfc->io_close = nested_io_close;
+    } else {
         avfc->io_open = block_io_open;
+    }
 
     mp_set_avdict(&dopts, lavfdopts->avopts);
 
@@ -990,6 +1065,7 @@ static int demux_lavf_fill_buffer(demuxer_t *demux)
 
     AVPacket *pkt = &(AVPacket){0};
     int r = av_read_frame(priv->avfc, pkt);
+    update_read_stats(demux);
     if (r < 0) {
         av_packet_unref(pkt);
         if (r == AVERROR(EAGAIN))
@@ -1080,6 +1156,8 @@ static void demux_seek_lavf(demuxer_t *demuxer, double seek_pts, int flags)
         av_strerror(r, buf, sizeof(buf));
         MP_VERBOSE(demuxer, "Seek failed (%s)\n", buf);
     }
+
+    update_read_stats(demuxer);
 }
 
 static int demux_lavf_control(demuxer_t *demuxer, int cmd, void *arg)
@@ -1176,7 +1254,19 @@ static void demux_close_lavf(demuxer_t *demuxer)
 {
     lavf_priv_t *priv = demuxer->priv;
     if (priv) {
+        // This will be a dangling pointer; but see below.
+        AVIOContext *leaking = priv->avfc ? priv->avfc->pb : NULL;
         avformat_close_input(&priv->avfc);
+        // The ffmpeg garbage breaks its own API yet again: hls.c will call
+        // io_open on the main playlist, but never calls io_close. This happens
+        // to work out for us (since we don't really use custom I/O), but it's
+        // still weird. Compensate.
+        if (priv->num_nested == 1 && priv->nested[0].id == leaking)
+            priv->num_nested = 0;
+        if (priv->num_nested) {
+            MP_WARN(demuxer, "Leaking %d nested connections (FFmpeg bug).\n",
+                    priv->num_nested);
+        }
         if (priv->pb)
             av_freep(&priv->pb->buffer);
         av_freep(&priv->pb);

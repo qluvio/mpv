@@ -125,6 +125,12 @@ build_options = [
         'desc': 'generate a clang compilation database',
         'func': check_true,
         'default': 'disable',
+    } , {
+        'name': '--swift-static',
+        'desc': 'static Swift linking',
+        'deps': 'os-darwin',
+        'func': check_ctx_vars('SWIFT_LIB_STATIC'),
+        'default': 'disable'
     }
 ]
 
@@ -418,7 +424,7 @@ iconv support use --disable-iconv.",
 ]
 
 ffmpeg_pkg_config_checks = [
-    'libavutil',     '>= 56.12.100',
+    'libavutil',     '>= 56.27.100',
     'libavcodec',    '>= 58.16.100',
     'libavformat',   '>= 58.9.100',
     'libswscale',    '>= 5.0.101',
@@ -747,13 +753,26 @@ video_output_features = [
         'deps': 'shaderc-shared || shaderc-static',
         'func': check_true,
     }, {
-        'name': '--crossc',
-        'desc': 'libcrossc SPIR-V translator',
-        'func': check_pkg_config('crossc'),
+        'name': 'spirv-cross-shared',
+        'desc': 'SPIRV-Cross SPIR-V shader converter (shared library)',
+        'deps': '!static-build',
+        'groups': ['spirv-cross'],
+        'func': check_pkg_config('spirv-cross-c-shared'),
+    }, {
+        'name': 'spirv-cross-static',
+        'desc': 'SPIRV-Cross SPIR-V shader converter (static library)',
+        'deps': '!spirv-cross-shared',
+        'groups': ['spirv-cross'],
+        'func': check_pkg_config('spirv-cross'),
+    }, {
+        'name': '--spirv-cross',
+        'desc': 'SPIRV-Cross SPIR-V shader converter',
+        'deps': 'spirv-cross-shared || spirv-cross-static',
+        'func': check_true,
     }, {
         'name': '--d3d11',
         'desc': 'Direct3D 11 video output',
-        'deps': 'win32-desktop && shaderc && crossc',
+        'deps': 'win32-desktop && shaderc && spirv-cross',
         'func': check_cc(header_name=['d3d11_1.h', 'dxgi1_2.h']),
     }, {
         # We need MMAL/bcm_host/dispmanx APIs. Also, most RPI distros require
@@ -805,11 +824,19 @@ video_output_features = [
                 "Aborting. If you really mean to compile without OpenGL " +
                 "video outputs use --disable-gl.",
     }, {
+        'name': '--libplacebo',
+        'desc': 'libplacebo support',
+        'func': check_pkg_config('libplacebo >= 1.18.0'),
+    }, {
         'name': '--vulkan',
-        'desc': 'Vulkan context support',
-        'deps': 'shaderc',
-        # Lowest version tested, Ubuntu 16.04's
-        'func': check_pkg_config('vulkan >= 1.0.61'),
+        'desc':  'Vulkan context support',
+        'deps': 'libplacebo',
+        'func': check_pkg_config('vulkan'),
+    }, {
+        'name': 'vaapi-vulkan',
+        'desc': 'VAAPI Vulkan',
+        'deps': 'vaapi && vulkan',
+        'func': check_true,
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
@@ -849,7 +876,7 @@ hwaccel_features = [
     }, {
         'name': 'ffnvcodec',
         'desc': 'CUDA Headers and dynamic loader',
-        'func': check_pkg_config('ffnvcodec >= 8.2.15.3'),
+        'func': check_pkg_config('ffnvcodec >= 8.2.15.7'),
     }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',
@@ -919,10 +946,20 @@ standalone_features = [
             framework_name=['AppKit'],
             compile_filename='test-touchbar.m',
             linkflags='-fobjc-arc')
-     }, {
+    }, {
+        'name': '--macos-10-11-features',
+        'desc': 'macOS 10.11 SDK Features',
+        'deps': 'cocoa',
+        'func': check_macos_sdk('10.11')
+    }, {
+        'name': '--macos-10-14-features',
+        'desc': 'macOS 10.14 SDK Features',
+        'deps': 'cocoa',
+        'func': check_macos_sdk('10.14')
+    }, {
         'name': '--macos-cocoa-cb',
         'desc': 'macOS opengl-cb backend',
-        'deps': 'cocoa  && swift',
+        'deps': 'cocoa && swift',
         'func': check_true
     }
 ]
