@@ -23,12 +23,10 @@
 #include <libavutil/common.h>
 #include <libavutil/bswap.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/intreadwrite.h>
 #include <libavutil/rational.h>
 #include <libavcodec/avcodec.h>
-
-#if LIBAVUTIL_VERSION_MICRO >= 100
 #include <libavutil/mastering_display_metadata.h>
-#endif
 
 #include "mpv_talloc.h"
 
@@ -40,14 +38,6 @@
 #include "sws_utils.h"
 #include "fmt-conversion.h"
 
-const struct m_opt_choice_alternatives mp_spherical_names[] = {
-    {"auto",        MP_SPHERICAL_AUTO},
-    {"none",        MP_SPHERICAL_NONE},
-    {"unknown",     MP_SPHERICAL_UNKNOWN},
-    {"equirect",    MP_SPHERICAL_EQUIRECTANGULAR},
-    {0}
-};
-
 // Determine strides, plane sizes, and total required size for an image
 // allocation. Returns total size on success, <0 on error. Unused planes
 // have out_stride/out_plane_size to 0, and out_plane_offset set to -1 up
@@ -58,6 +48,10 @@ static int mp_image_layout(int imgfmt, int w, int h, int stride_align,
                            int out_plane_size[MP_MAX_PLANES])
 {
     struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(imgfmt);
+
+    w = MP_ALIGN_UP(w, desc.align_x);
+    h = MP_ALIGN_UP(h, desc.align_y);
+
     struct mp_image_params params = {.imgfmt = imgfmt, .w = w, .h = h};
 
     if (!mp_image_params_valid(&params) || desc.flags & MP_IMGFLAG_HWACCEL)
@@ -72,9 +66,6 @@ static int mp_image_layout(int imgfmt, int w, int h, int stride_align,
         int alloc_h = MP_ALIGN_UP(h, 32) >> desc.ys[n];
         int line_bytes = (alloc_w * desc.bpp[n] + 7) / 8;
         out_stride[n] = MP_ALIGN_UP(line_bytes, stride_align);
-        // also align to a multiple of desc.bytes[n]
-        while (desc.bytes[n] && out_stride[n] % desc.bytes[n])
-            out_stride[n] += stride_align;
         out_plane_size[n] = out_stride[n] * alloc_h;
     }
     if (desc.flags & MP_IMGFLAG_PAL)
@@ -174,7 +165,7 @@ static bool mp_image_alloc_planes(struct mp_image *mpi)
     assert(!mpi->planes[0]);
     assert(!mpi->bufs[0]);
 
-    int align = SWS_MIN_BYTE_ALIGN;
+    int align = MP_IMAGE_BYTE_ALIGN;
 
     int size = mp_image_get_alloc_size(mpi->imgfmt, mpi->w, mpi->h, align);
     if (size < 0)
@@ -225,13 +216,15 @@ int mp_chroma_div_up(int size, int shift)
 // Return the storage width in pixels of the given plane.
 int mp_image_plane_w(struct mp_image *mpi, int plane)
 {
-    return mp_chroma_div_up(mpi->w, mpi->fmt.xs[plane]);
+    return mp_chroma_div_up(MP_ALIGN_UP(mpi->w, mpi->fmt.align_x),
+                            mpi->fmt.xs[plane]);
 }
 
 // Return the storage height in pixels of the given plane.
 int mp_image_plane_h(struct mp_image *mpi, int plane)
 {
-    return mp_chroma_div_up(mpi->h, mpi->fmt.ys[plane]);
+    return mp_chroma_div_up(MP_ALIGN_UP(mpi->h, mpi->fmt.align_y),
+                            mpi->fmt.ys[plane]);
 }
 
 // Caller has to make sure this doesn't exceed the allocated plane data/strides.
@@ -263,6 +256,19 @@ struct mp_image *mp_image_alloc(int imgfmt, int w, int h)
         return NULL;
     }
     return mpi;
+}
+
+int mp_image_approx_byte_size(struct mp_image *img)
+{
+    int total = sizeof(*img);
+
+    for (int n = 0; n < MP_MAX_PLANES; n++) {
+        struct AVBufferRef *buf = img->bufs[n];
+        if (buf)
+            total += buf->size;
+    }
+
+    return total;
 }
 
 struct mp_image *mp_image_new_copy(struct mp_image *img)
@@ -447,10 +453,8 @@ void mp_image_unrefp(struct mp_image **p_img)
     *p_img = NULL;
 }
 
-typedef void *(*memcpy_fn)(void *d, const void *s, size_t size);
-
-static void memcpy_pic_cb(void *dst, const void *src, int bytesPerLine, int height,
-                          int dstStride, int srcStride, memcpy_fn cpy)
+void memcpy_pic(void *dst, const void *src, int bytesPerLine, int height,
+                int dstStride, int srcStride)
 {
     if (bytesPerLine == dstStride && dstStride == srcStride && height) {
         if (srcStride < 0) {
@@ -459,18 +463,17 @@ static void memcpy_pic_cb(void *dst, const void *src, int bytesPerLine, int heig
             srcStride = -srcStride;
         }
 
-        cpy(dst, src, srcStride * (height - 1) + bytesPerLine);
+        memcpy(dst, src, srcStride * (height - 1) + bytesPerLine);
     } else {
         for (int i = 0; i < height; i++) {
-            cpy(dst, src, bytesPerLine);
+            memcpy(dst, src, bytesPerLine);
             src = (uint8_t*)src + srcStride;
             dst = (uint8_t*)dst + dstStride;
         }
     }
 }
 
-static void mp_image_copy_cb(struct mp_image *dst, struct mp_image *src,
-                             memcpy_fn cpy)
+void mp_image_copy(struct mp_image *dst, struct mp_image *src)
 {
     assert(dst->imgfmt == src->imgfmt);
     assert(dst->w == src->w && dst->h == src->h);
@@ -478,22 +481,26 @@ static void mp_image_copy_cb(struct mp_image *dst, struct mp_image *src,
     for (int n = 0; n < dst->num_planes; n++) {
         int line_bytes = (mp_image_plane_w(dst, n) * dst->fmt.bpp[n] + 7) / 8;
         int plane_h = mp_image_plane_h(dst, n);
-        memcpy_pic_cb(dst->planes[n], src->planes[n], line_bytes, plane_h,
-                      dst->stride[n], src->stride[n], cpy);
+        memcpy_pic(dst->planes[n], src->planes[n], line_bytes, plane_h,
+                   dst->stride[n], src->stride[n]);
     }
     if (dst->fmt.flags & MP_IMGFLAG_PAL)
         memcpy(dst->planes[1], src->planes[1], AVPALETTE_SIZE);
-}
-
-void mp_image_copy(struct mp_image *dst, struct mp_image *src)
-{
-    mp_image_copy_cb(dst, src, memcpy);
 }
 
 static enum mp_csp mp_image_params_get_forced_csp(struct mp_image_params *params)
 {
     int imgfmt = params->hw_subfmt ? params->hw_subfmt : params->imgfmt;
     return mp_imgfmt_get_forced_csp(imgfmt);
+}
+
+static void assign_bufref(AVBufferRef **dst, AVBufferRef *new)
+{
+    av_buffer_unref(dst);
+    if (new) {
+        *dst = av_buffer_ref(new);
+        MP_HANDLE_OOM(*dst);
+    }
 }
 
 void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
@@ -509,7 +516,7 @@ void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
     dst->params.p_h = src->params.p_h;
     dst->params.color = src->params.color;
     dst->params.chroma_location = src->params.chroma_location;
-    dst->params.spherical = src->params.spherical;
+    dst->params.alpha = src->params.alpha;
     dst->nominal_fps = src->nominal_fps;
     // ensure colorspace consistency
     if (mp_image_params_get_forced_csp(&dst->params) !=
@@ -521,13 +528,8 @@ void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
                 memcpy(dst->planes[1], src->planes[1], AVPALETTE_SIZE);
         }
     }
-    av_buffer_unref(&dst->icc_profile);
-    dst->icc_profile = src->icc_profile;
-    if (dst->icc_profile) {
-        dst->icc_profile = av_buffer_ref(dst->icc_profile);
-        if (!dst->icc_profile)
-            abort();
-    }
+    assign_bufref(&dst->icc_profile, src->icc_profile);
+    assign_bufref(&dst->a53_cc, src->a53_cc);
 }
 
 // Crop the given image to (x0, y0)-(x1, y1) (bottom/right border exclusive)
@@ -552,8 +554,54 @@ void mp_image_crop_rc(struct mp_image *img, struct mp_rect rc)
     mp_image_crop(img, rc.x0, rc.y0, rc.x1, rc.y1);
 }
 
+// Repeatedly write count patterns of src[0..src_size] to p.
+static void memset_pattern(void *p, size_t count, uint8_t *src, size_t src_size)
+{
+    assert(src_size >= 1);
+
+    if (src_size == 1) {
+        memset(p, src[0], count);
+    } else if (src_size == 2) { // >8 bit YUV => common, be slightly less naive
+        uint16_t val;
+        memcpy(&val, src, 2);
+        uint16_t *p16 = p;
+        while (count--)
+            *p16++ = val;
+    } else {
+        while (count--) {
+            memcpy(p, src, src_size);
+            p = (char *)p + src_size;
+        }
+    }
+}
+
+static bool endian_swap_bytes(void *d, size_t bytes, size_t word_size)
+{
+    if (word_size != 2 && word_size != 4)
+        return false;
+
+    size_t num_words = bytes / word_size;
+    uint8_t *ud = d;
+
+    switch (word_size) {
+    case 2:
+        for (size_t x = 0; x < num_words; x++)
+            AV_WL16(ud + x * 2, AV_RB16(ud + x * 2));
+        break;
+    case 4:
+        for (size_t x = 0; x < num_words; x++)
+            AV_WL32(ud + x * 2, AV_RB32(ud + x * 2));
+        break;
+    default:
+        assert(0);
+    }
+
+    return true;
+}
+
 // Bottom/right border is allowed not to be aligned, but it might implicitly
 // overwrite pixel data until the alignment (align_x/align_y) is reached.
+// Alpha is cleared to 0 (fully transparent).
 void mp_image_clear(struct mp_image *img, int x0, int y0, int x1, int y1)
 {
     assert(x0 >= 0 && y0 >= 0);
@@ -563,33 +611,85 @@ void mp_image_clear(struct mp_image *img, int x0, int y0, int x1, int y1)
     assert(!(y0 & (img->fmt.align_y - 1)));
 
     struct mp_image area = *img;
+    struct mp_imgfmt_desc *fmt = &area.fmt;
     mp_image_crop(&area, x0, y0, x1, y1);
 
-    uint32_t plane_clear[MP_MAX_PLANES] = {0};
+    // "Black" color for each plane.
+    uint8_t plane_clear[MP_MAX_PLANES][8] = {0};
+    int plane_size[MP_MAX_PLANES] = {0};
+    int misery = 1; // pixel group width
 
-    if (area.imgfmt == IMGFMT_UYVY) {
-        plane_clear[0] = av_le2ne16(0x0080);
-    } else if (area.fmt.flags & MP_IMGFLAG_YUV_NV) {
-        plane_clear[1] = 0x8080;
-    } else if (area.fmt.flags & MP_IMGFLAG_YUV_P) {
-        uint16_t chroma_clear = (1 << area.fmt.plane_bits) / 2;
-        if (!(area.fmt.flags & MP_IMGFLAG_NE))
-            chroma_clear = av_bswap16(chroma_clear);
-        if (area.num_planes > 2)
-            plane_clear[1] = plane_clear[2] = chroma_clear;
+    // YUV integer chroma needs special consideration, and technically luma is
+    // usually not 0 either.
+    if ((fmt->flags & (MP_IMGFLAG_HAS_COMPS | MP_IMGFLAG_PACKED_SS_YUV)) &&
+        (fmt->flags & MP_IMGFLAG_TYPE_MASK) == MP_IMGFLAG_TYPE_UINT &&
+        (fmt->flags & MP_IMGFLAG_COLOR_MASK) == MP_IMGFLAG_COLOR_YUV)
+    {
+        uint64_t plane_clear_i[MP_MAX_PLANES] = {0};
+
+        // Need to handle "multiple" pixels with packed YUV.
+        uint8_t luma_offsets[4] = {0};
+        if (fmt->flags & MP_IMGFLAG_PACKED_SS_YUV) {
+            misery = fmt->align_x;
+            if (misery <= MP_ARRAY_SIZE(luma_offsets)) // ignore if out of bounds
+                mp_imgfmt_get_packed_yuv_locations(fmt->id, luma_offsets);
+        }
+
+        for (int c = 0; c < 4; c++) {
+            struct mp_imgfmt_comp_desc *cd = &fmt->comps[c];
+            int plane_bits = fmt->bpp[cd->plane] * misery;
+            if (plane_bits <= 64 && plane_bits % 8u == 0 && cd->size) {
+                plane_size[cd->plane] = plane_bits / 8u;
+                int depth = cd->size + MPMIN(cd->pad, 0);
+                double m, o;
+                mp_get_csp_uint_mul(area.params.color.space,
+                                    area.params.color.levels,
+                                    depth, c + 1, &m, &o);
+                uint64_t val = MPCLAMP(lrint((0 - o) / m), 0, 1ull << depth);
+                plane_clear_i[cd->plane] |= val << cd->offset;
+                for (int x = 1; x < (c ? 0 : misery); x++)
+                    plane_clear_i[cd->plane] |= val << luma_offsets[x];
+            }
+        }
+
+        for (int p = 0; p < MP_MAX_PLANES; p++) {
+            if (!plane_clear_i[p])
+                plane_size[p] = 0;
+            memcpy(&plane_clear[p][0], &plane_clear_i[p], 8); // endian dependent
+
+            if (fmt->endian_shift) {
+                endian_swap_bytes(&plane_clear[p][0], plane_size[p],
+                                  1 << fmt->endian_shift);
+            }
+        }
     }
 
     for (int p = 0; p < area.num_planes; p++) {
-        int bpp = area.fmt.bpp[p];
-        int bytes = (mp_image_plane_w(&area, p) * bpp + 7) / 8;
-        if (bpp <= 8) {
-            memset_pic(area.planes[p], plane_clear[p], bytes,
-                       mp_image_plane_h(&area, p), area.stride[p]);
-        } else {
-            memset16_pic(area.planes[p], plane_clear[p], (bytes + 1) / 2,
-                         mp_image_plane_h(&area, p), area.stride[p]);
+        int p_h = mp_image_plane_h(&area, p);
+        int p_w = mp_image_plane_w(&area, p);
+        for (int y = 0; y < p_h; y++) {
+            void *ptr = area.planes[p] + (ptrdiff_t)area.stride[p] * y;
+            if (plane_size[p] && plane_clear[p]) {
+                memset_pattern(ptr, p_w / misery, plane_clear[p], plane_size[p]);
+            } else {
+                memset(ptr, 0, mp_image_plane_bytes(&area, p, 0, area.w));
+            }
         }
     }
+}
+
+void mp_image_clear_rc(struct mp_image *mpi, struct mp_rect rc)
+{
+    mp_image_clear(mpi, rc.x0, rc.y0, rc.x1, rc.y1);
+}
+
+// Clear the are of the image _not_ covered by rc.
+void mp_image_clear_rc_inv(struct mp_image *mpi, struct mp_rect rc)
+{
+    struct mp_rect clr[4];
+    int cnt = mp_rect_subtract(&(struct mp_rect){0, 0, mpi->w, mpi->h}, &rc, clr);
+    for (int n = 0; n < cnt; n++)
+        mp_image_clear_rc(mpi, clr[n]);
 }
 
 void mp_image_vflip(struct mp_image *img)
@@ -630,8 +730,6 @@ char *mp_image_params_to_str_buf(char *b, size_t bs,
         mp_snprintf_cat(b, bs, " %s", mp_imgfmt_to_name(p->imgfmt));
         if (p->hw_subfmt)
             mp_snprintf_cat(b, bs, "[%s]", mp_imgfmt_to_name(p->hw_subfmt));
-        if (p->hw_flags)
-            mp_snprintf_cat(b, bs, "[0x%x]", p->hw_flags);
         mp_snprintf_cat(b, bs, " %s/%s/%s/%s/%s",
                         m_opt_choice_str(mp_csp_names, p->color.space),
                         m_opt_choice_str(mp_csp_prim_names, p->color.primaries),
@@ -648,11 +746,9 @@ char *mp_image_params_to_str_buf(char *b, size_t bs,
             mp_snprintf_cat(b, bs, " stereo=%s",
                             MP_STEREO3D_NAME_DEF(p->stereo3d, "?"));
         }
-        if (p->spherical.type != MP_SPHERICAL_NONE) {
-            const float *a = p->spherical.ref_angles;
-            mp_snprintf_cat(b, bs, " (%s %f/%f/%f)",
-                            m_opt_choice_str(mp_spherical_names, p->spherical.type),
-                            a[0], a[1], a[2]);
+        if (p->alpha) {
+            mp_snprintf_cat(b, bs, " A=%s",
+                            m_opt_choice_str(mp_alpha_names, p->alpha));
         }
     } else {
         snprintf(b, bs, "???");
@@ -688,29 +784,18 @@ bool mp_image_params_valid(const struct mp_image_params *p)
     return true;
 }
 
-static bool mp_spherical_equal(const struct mp_spherical_params *p1,
-                               const struct mp_spherical_params *p2)
-{
-    for (int n = 0; n < 3; n++) {
-        if (p1->ref_angles[n] != p2->ref_angles[n])
-            return false;
-    }
-    return p1->type == p2->type;
-}
-
 bool mp_image_params_equal(const struct mp_image_params *p1,
                            const struct mp_image_params *p2)
 {
     return p1->imgfmt == p2->imgfmt &&
            p1->hw_subfmt == p2->hw_subfmt &&
-           p1->hw_flags == p2->hw_flags &&
            p1->w == p2->w && p1->h == p2->h &&
            p1->p_w == p2->p_w && p1->p_h == p2->p_h &&
            mp_colorspace_equal(p1->color, p2->color) &&
            p1->chroma_location == p2->chroma_location &&
            p1->rotate == p2->rotate &&
            p1->stereo3d == p2->stereo3d &&
-           mp_spherical_equal(&p1->spherical, &p2->spherical);
+           p1->alpha == p2->alpha;
 }
 
 // Set most image parameters, but not image format or size.
@@ -785,16 +870,15 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
         params->color.space = MP_CSP_XYZ;
         params->color.levels = MP_CSP_LEVELS_PC;
 
-        // The default XYZ matrix converts it to BT.709 color space
-        // since that's the most likely scenario. Proper VOs should ignore
-        // this field as well as the matrix and treat XYZ input as absolute,
-        // but for VOs which use the matrix (and hence, consult this field)
-        // this is the correct parameter. This doubles as a reasonable output
-        // gamut for VOs which *do* use the specialized XYZ matrix but don't
-        // know any better output gamut other than whatever the source is
-        // tagged with.
+        // In theory, XYZ data does not really need a concept of 'primaries' to
+        // function, but this field can still be relevant for guiding gamut
+        // mapping optimizations, and it's also used by `mp_get_csp_matrix`
+        // when deciding what RGB space to map XYZ to for VOs that don't want
+        // to directly ingest XYZ into their color pipeline. BT.709 would be a
+        // sane default here, but it runs the risk of clipping any wide gamut
+        // content, so we pick BT.2020 instead to be on the safer side.
         if (params->color.primaries == MP_CSP_PRIM_AUTO)
-            params->color.primaries = MP_CSP_PRIM_BT_709;
+            params->color.primaries = MP_CSP_PRIM_BT_2020;
         if (params->color.gamma == MP_CSP_TRC_AUTO)
             params->color.gamma = MP_CSP_TRC_LINEAR;
     } else {
@@ -884,12 +968,11 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
         struct mp_image_params *p = (void *)src->opaque_ref->data;
         dst->params.rotate = p->rotate;
         dst->params.stereo3d = p->stereo3d;
-        dst->params.spherical = p->spherical;
         // Might be incorrect if colorspace changes.
         dst->params.color.light = p->color.light;
+        dst->params.alpha = p->alpha;
     }
 
-#if LIBAVUTIL_VERSION_MICRO >= 100
     sd = av_frame_get_side_data(src, AV_FRAME_DATA_ICC_PROFILE);
     if (sd)
         dst->icc_profile = sd->buf;
@@ -921,15 +1004,10 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
         };
         MP_TARRAY_APPEND(NULL, dst->ff_side_data, dst->num_ff_side_data, mpsd);
     }
-#endif
 
     if (dst->hwctx) {
         AVHWFramesContext *fctx = (void *)dst->hwctx->data;
         dst->params.hw_subfmt = pixfmt2imgfmt(fctx->sw_format);
-        const struct hwcontext_fns *fns =
-            hwdec_get_hwcontext_fns(fctx->device_ctx->type);
-        if (fns && fns->complete_image_params)
-            fns->complete_image_params(dst);
     }
 
     struct mp_image *res = mp_image_new_ref(dst);
@@ -994,7 +1072,6 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *src)
         abort();
     *(struct mp_image_params *)dst->opaque_ref->data = src->params;
 
-#if LIBAVUTIL_VERSION_MICRO >= 100
     if (src->icc_profile) {
         AVFrameSideData *sd =
             av_frame_new_side_data_from_buf(dst, AV_FRAME_DATA_ICC_PROFILE,
@@ -1024,7 +1101,6 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *src)
             mpsd->buf = NULL;
         }
     }
-#endif
 
     talloc_free(new_ref);
 
@@ -1039,12 +1115,6 @@ struct AVFrame *mp_image_to_av_frame_and_unref(struct mp_image *img)
     AVFrame *frame = mp_image_to_av_frame(img);
     talloc_free(img);
     return frame;
-}
-
-void memcpy_pic(void *dst, const void *src, int bytesPerLine, int height,
-                int dstStride, int srcStride)
-{
-    memcpy_pic_cb(dst, src, bytesPerLine, height, dstStride, srcStride, memcpy);
 }
 
 void memset_pic(void *dst, int fill, int bytesPerLine, int height, int stride)
@@ -1072,4 +1142,41 @@ void memset16_pic(void *dst, int fill, int unitsPerLine, int height, int stride)
             dst = (uint8_t *)dst + stride;
         }
     }
+}
+
+// Pixel at the given luma position on the given plane. x/y always refer to
+// non-subsampled coordinates (even if plane is chroma).
+// The coordinates must be aligned to mp_imgfmt_desc.align_x/y (these are byte
+// and chroma boundaries).
+// You cannot access e.g. individual luma pixels on the luma plane with yuv420p.
+void *mp_image_pixel_ptr(struct mp_image *img, int plane, int x, int y)
+{
+    assert(MP_IS_ALIGNED(x, img->fmt.align_x));
+    assert(MP_IS_ALIGNED(y, img->fmt.align_y));
+    return mp_image_pixel_ptr_ny(img, plane, x, y);
+}
+
+// Like mp_image_pixel_ptr(), but do not require alignment on Y coordinates if
+// the plane does not require it. Use with care.
+// Useful for addressing luma rows.
+void *mp_image_pixel_ptr_ny(struct mp_image *img, int plane, int x, int y)
+{
+    assert(MP_IS_ALIGNED(x, img->fmt.align_x));
+    assert(MP_IS_ALIGNED(y, 1 << img->fmt.ys[plane]));
+    return img->planes[plane] +
+           img->stride[plane] * (ptrdiff_t)(y >> img->fmt.ys[plane]) +
+           (x >> img->fmt.xs[plane]) * (size_t)img->fmt.bpp[plane] / 8;
+}
+
+// Return size of pixels [x0, x0+w-1] in bytes. The coordinates refer to non-
+// subsampled pixels (basically plane 0), and the size is rounded to chroma
+// and byte alignment boundaries for the entire image, even if plane!=0.
+// x0!=0 is useful for rounding (e.g. 8 bpp, x0=7, w=7 => 0..15 => 2 bytes).
+size_t mp_image_plane_bytes(struct mp_image *img, int plane, int x0, int w)
+{
+    int x1 = MP_ALIGN_UP(x0 + w, img->fmt.align_x);
+    x0 = MP_ALIGN_DOWN(x0, img->fmt.align_x);
+    size_t bpp = img->fmt.bpp[plane];
+    int xs = img->fmt.xs[plane];
+    return (x1 >> xs) * bpp / 8 - (x0 >> xs) * bpp / 8;
 }

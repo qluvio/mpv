@@ -40,6 +40,7 @@
 #include "options/m_config.h"
 #include "common/msg.h"
 #include "common/global.h"
+#include "common/stats.h"
 #include "video/hwdec.h"
 #include "video/mp_image.h"
 #include "sub/osd.h"
@@ -60,6 +61,7 @@ extern const struct vo_driver video_out_drm;
 extern const struct vo_driver video_out_direct3d;
 extern const struct vo_driver video_out_sdl;
 extern const struct vo_driver video_out_vaapi;
+extern const struct vo_driver video_out_wlshm;
 extern const struct vo_driver video_out_rpi;
 extern const struct vo_driver video_out_tct;
 
@@ -69,9 +71,6 @@ const struct vo_driver *const video_out_drivers[] =
 #if HAVE_ANDROID
     &video_out_mediacodec_embed,
 #endif
-#if HAVE_RPI
-    &video_out_rpi,
-#endif
     &video_out_gpu,
 #if HAVE_VDPAU
     &video_out_vdpau,
@@ -79,10 +78,13 @@ const struct vo_driver *const video_out_drivers[] =
 #if HAVE_DIRECT3D
     &video_out_direct3d,
 #endif
+#if HAVE_WAYLAND && HAVE_MEMFD_CREATE
+    &video_out_wlshm,
+#endif
 #if HAVE_XV
     &video_out_xv,
 #endif
-#if HAVE_SDL2
+#if HAVE_SDL2_VIDEO
     &video_out_sdl,
 #endif
 #if HAVE_VAAPI_X11 && HAVE_GPL
@@ -100,6 +102,9 @@ const struct vo_driver *const video_out_drivers[] =
 #endif
 #if HAVE_DRM
     &video_out_drm,
+#endif
+#if HAVE_RPI_MMAL
+    &video_out_rpi,
 #endif
     &video_out_lavc,
     NULL
@@ -123,12 +128,11 @@ struct vo_internal {
     bool want_redraw;               // redraw request from VO to player
     bool send_reset;                // send VOCTRL_RESET
     bool paused;
+    bool wakeup_on_done;
     int queued_events;              // event mask for the user
     int internal_events;            // event mask for us
 
     int64_t nominal_vsync_interval;
-
-    bool external_renderloop_drive;
 
     int64_t vsync_interval;
     int64_t *vsync_samples;
@@ -160,6 +164,8 @@ struct vo_internal {
 
     double display_fps;
     double reported_display_fps;
+
+    struct stats_ctx *stats;
 };
 
 extern const struct m_sub_options gl_video_conf;
@@ -226,9 +232,12 @@ static void update_opts(void *p)
     if (m_config_cache_update(vo->opts_cache)) {
         read_opts(vo);
 
-        // "Legacy" update of video position related options.
-        if (vo->driver->control)
+        if (vo->driver->control) {
+            vo->driver->control(vo, VOCTRL_VO_OPTS_CHANGED, NULL);
+            // "Legacy" update of video position related options.
+            // Unlike VOCTRL_VO_OPTS_CHANGED, often not propagated to backends.
             vo->driver->control(vo, VOCTRL_SET_PANSCAN, NULL);
+        }
     }
 
     if (vo->gl_opts_cache && m_config_cache_update(vo->gl_opts_cache)) {
@@ -289,6 +298,7 @@ static struct vo *vo_create(bool probing, struct mpv_global *global,
         .dispatch = mp_dispatch_create(vo),
         .req_frames = 1,
         .estimated_vsync_jitter = -1,
+        .stats = stats_ctx_create(vo, global, "vo"),
     };
     mp_dispatch_set_wakeup_fn(vo->in->dispatch, dispatch_wakeup_cb, vo);
     pthread_mutex_init(&vo->in->lock, NULL);
@@ -580,7 +590,7 @@ static void run_reconfig(void *p)
 
     MP_VERBOSE(vo, "reconfig to %s\n", mp_image_params_to_str(params));
 
-    m_config_cache_update(vo->opts_cache);
+    update_opts(vo);
 
     mp_image_params_get_dsize(params, &vo->dwidth, &vo->dheight);
 
@@ -634,7 +644,7 @@ static void run_control(void *p)
     struct vo *vo = pp[0];
     int request = (intptr_t)pp[1];
     void *data = pp[2];
-    m_config_cache_update(vo->opts_cache);
+    update_opts(vo);
     int ret = vo->driver->control(vo, request, data);
     if (pp[3])
         *(int *)pp[3] = ret;
@@ -738,6 +748,41 @@ void vo_wakeup(struct vo *vo)
     pthread_mutex_unlock(&in->lock);
 }
 
+static bool still_displaying(struct vo *vo)
+{
+    struct vo_internal *in = vo->in;
+    int64_t now = mp_time_us();
+    int64_t frame_end = 0;
+    if (in->current_frame) {
+        frame_end = in->current_frame->pts + MPMAX(in->current_frame->duration, 0);
+        if (in->current_frame->display_synced)
+            frame_end = in->current_frame->num_vsyncs > 0 ? INT64_MAX : 0;
+    }
+    return (now < frame_end || in->rendering || in->frame_queued) && in->hasframe;
+}
+
+// Return true if there is still a frame being displayed (or queued).
+bool vo_still_displaying(struct vo *vo)
+{
+    pthread_mutex_lock(&vo->in->lock);
+    bool res = still_displaying(vo);
+    pthread_mutex_unlock(&vo->in->lock);
+    return res;
+}
+
+// Make vo issue a wakeup once vo_still_displaying() becomes true.
+void vo_request_wakeup_on_done(struct vo *vo)
+{
+    struct vo_internal *in = vo->in;
+    pthread_mutex_lock(&vo->in->lock);
+    if (still_displaying(vo)) {
+        in->wakeup_on_done = true;
+    } else {
+        wakeup_core(vo);
+    }
+    pthread_mutex_unlock(&vo->in->lock);
+}
+
 // Whether vo_queue_frame() can be called. If the VO is not ready yet, the
 // function will return false, and the VO will call the wakeup callback once
 // it's ready.
@@ -820,12 +865,11 @@ static void wait_until(struct vo *vo, int64_t target)
     pthread_mutex_unlock(&in->lock);
 }
 
-bool vo_render_frame_external(struct vo *vo)
+static bool render_frame(struct vo *vo)
 {
     struct vo_internal *in = vo->in;
     struct vo_frame *frame = NULL;
-    bool got_frame = false;
-    bool flipped = false;
+    bool more_frames = false;
 
     update_display_fps(vo);
 
@@ -879,6 +923,9 @@ bool vo_render_frame_external(struct vo *vo)
     if (in->current_frame->num_vsyncs > 0)
         in->current_frame->num_vsyncs -= 1;
 
+    // Always render when paused (it's typically the last frame for a while).
+    in->dropped_frame &= !in->paused;
+
     bool use_vsync = in->current_frame->display_synced && !in->paused;
     if (use_vsync && !in->expecting_vsync) // first DS frame in a row
         in->prev_vsync = now;
@@ -886,15 +933,21 @@ bool vo_render_frame_external(struct vo *vo)
 
     if (in->dropped_frame) {
         in->drop_count += 1;
+        wakeup_core(vo);
     } else {
-        flipped = true;
         in->rendering = true;
         in->hasframe_rendered = true;
         int64_t prev_drop_count = vo->in->drop_count;
+        // Can the core queue new video now? Non-display-sync uses a separate
+        // timer instead, but possibly benefits from preparing a frame early.
+        bool can_queue = !in->frame_queued &&
+            (in->current_frame->num_vsyncs < 1 || !use_vsync);
         pthread_mutex_unlock(&in->lock);
-        wakeup_core(vo); // core can queue new video now
 
-        MP_STATS(vo, "start video-draw");
+        if (can_queue)
+            wakeup_core(vo);
+
+        stats_time_start(in->stats, "video-draw");
 
         if (vo->driver->draw_frame) {
             vo->driver->draw_frame(vo, frame);
@@ -902,11 +955,11 @@ bool vo_render_frame_external(struct vo *vo)
             vo->driver->draw_image(vo, mp_image_new_ref(frame->current));
         }
 
-        MP_STATS(vo, "end video-draw");
+        stats_time_end(in->stats, "video-draw");
 
         wait_until(vo, target);
 
-        MP_STATS(vo, "start video-flip");
+        stats_time_start(in->stats, "video-flip");
 
         vo->driver->flip_page(vo);
 
@@ -921,7 +974,7 @@ bool vo_render_frame_external(struct vo *vo)
         if (vsync.last_queue_display_time < 0)
             vsync.last_queue_display_time = mp_time_us();
 
-        MP_STATS(vo, "end video-flip");
+        stats_time_end(in->stats, "video-flip");
 
         pthread_mutex_lock(&in->lock);
         in->dropped_frame = prev_drop_count < vo->in->drop_count;
@@ -941,17 +994,24 @@ bool vo_render_frame_external(struct vo *vo)
         in->request_redraw = false;
     }
 
-    pthread_cond_broadcast(&in->wakeup); // for vo_wait_frame()
-    wakeup_core(vo);
+    if (in->current_frame && in->current_frame->num_vsyncs &&
+        in->current_frame->display_synced)
+        more_frames = true;
 
-    got_frame = true;
+    if (in->frame_queued && in->frame_queued->display_synced)
+        more_frames = true;
+
+    pthread_cond_broadcast(&in->wakeup); // for vo_wait_frame()
 
 done:
     talloc_free(frame);
+    if (in->wakeup_on_done && !still_displaying(vo)) {
+        in->wakeup_on_done = false;
+        wakeup_core(vo);
+    }
     pthread_mutex_unlock(&in->lock);
-    if (in->external_renderloop_drive)
-        return flipped;
-    return got_frame || (in->frame_queued && in->frame_queued->display_synced);
+
+    return more_frames;
 }
 
 static void do_redraw(struct vo *vo)
@@ -993,44 +1053,6 @@ static void do_redraw(struct vo *vo)
         talloc_free(frame);
 }
 
-static void drop_unrendered_frame(struct vo *vo)
-{
-    struct vo_internal *in = vo->in;
-
-    pthread_mutex_lock(&in->lock);
-
-    if (!in->frame_queued)
-        goto end;
-
-    if ((in->frame_queued->pts + in->frame_queued->duration) > mp_time_us())
-        goto end;
-
-    MP_VERBOSE(vo, "Dropping unrendered frame (pts %"PRId64")\n", in->frame_queued->pts);
-
-    talloc_free(in->frame_queued);
-    in->frame_queued = NULL;
-    in->hasframe = false;
-    pthread_cond_broadcast(&in->wakeup);
-    wakeup_core(vo);
-
-end:
-    pthread_mutex_unlock(&in->lock);
-}
-
-void vo_enable_external_renderloop(struct vo *vo)
-{
-    struct vo_internal *in = vo->in;
-    MP_VERBOSE(vo, "Enabling event driven renderloop!\n");
-    in->external_renderloop_drive = true;
-}
-
-void vo_disable_external_renderloop(struct vo *vo)
-{
-    struct vo_internal *in = vo->in;
-    MP_VERBOSE(vo, "Disabling event driven renderloop!\n");
-    in->external_renderloop_drive = false;
-}
-
 static struct mp_image *get_image_vo(void *ctx, int imgfmt, int w, int h,
                                      int stride_align)
 {
@@ -1046,8 +1068,10 @@ static void *vo_thread(void *ptr)
 
     mpthread_set_name("vo");
 
-    if (vo->driver->get_image)
+    if (vo->driver->get_image) {
         in->dr_helper = dr_helper_create(in->dispatch, get_image_vo, vo);
+        dr_helper_acquire_thread(in->dr_helper);
+    }
 
     int r = vo->driver->preinit(vo) ? -1 : 0;
     mp_rendezvous(vo, r); // init barrier
@@ -1062,12 +1086,9 @@ static void *vo_thread(void *ptr)
         mp_dispatch_queue_process(vo->in->dispatch, 0);
         if (in->terminate)
             break;
+        stats_event(in->stats, "iterations");
         vo->driver->control(vo, VOCTRL_CHECK_EVENTS, NULL);
-        bool working = false;
-        if (!in->external_renderloop_drive || !in->hasframe_rendered)
-            working = vo_render_frame_external(vo);
-        else
-            drop_unrendered_frame(vo);
+        bool working = render_frame(vo);
         int64_t now = mp_time_us();
         int64_t wait_until = now + (working ? 0 : (int64_t)1e9);
 
@@ -1080,11 +1101,11 @@ static void *vo_thread(void *ptr)
                 wakeup_core(vo);
             }
         }
-        if (vo->want_redraw) {
-            vo->want_redraw = false;
+        if (vo->want_redraw && !in->want_redraw) {
             in->want_redraw = true;
             wakeup_core(vo);
         }
+        vo->want_redraw = false;
         bool redraw = in->request_redraw;
         bool send_reset = in->send_reset;
         in->send_reset = false;
@@ -1176,24 +1197,6 @@ void vo_seek_reset(struct vo *vo)
     in->send_reset = true;
     wakeup_locked(vo);
     pthread_mutex_unlock(&in->lock);
-}
-
-// Return true if there is still a frame being displayed (or queued).
-// If this returns true, a wakeup some time in the future is guaranteed.
-bool vo_still_displaying(struct vo *vo)
-{
-    struct vo_internal *in = vo->in;
-    pthread_mutex_lock(&vo->in->lock);
-    int64_t now = mp_time_us();
-    int64_t frame_end = 0;
-    if (in->current_frame) {
-        frame_end = in->current_frame->pts + MPMAX(in->current_frame->duration, 0);
-        if (in->current_frame->display_synced)
-            frame_end = in->current_frame->num_vsyncs > 0 ? INT64_MAX : 0;
-    }
-    bool working = now < frame_end || in->rendering || in->frame_queued;
-    pthread_mutex_unlock(&vo->in->lock);
-    return working && in->hasframe;
 }
 
 // Whether at least 1 frame was queued or rendered since last seek or reconfig.

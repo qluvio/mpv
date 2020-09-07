@@ -96,9 +96,24 @@ static void term_osd_update(struct MPContext *mpctx)
     }
 }
 
+static void term_osd_update_title(struct MPContext *mpctx)
+{
+    if (!mpctx->opts->use_terminal)
+        return;
+
+    char *s = mp_property_expand_escaped_string(mpctx, mpctx->opts->term_title);
+    if (bstr_equals(bstr0(s), bstr0(mpctx->term_osd_title))) {
+        talloc_free(s);
+        return;
+    }
+
+    mp_msg_set_term_title(mpctx->statusline, s);
+    mpctx->term_osd_title = talloc_steal(mpctx, s);
+}
+
 void term_osd_set_subs(struct MPContext *mpctx, const char *text)
 {
-    if (mpctx->video_out || !text)
+    if (mpctx->video_out || !text || !mpctx->opts->subs_rend->sub_visibility)
         text = ""; // disable
     if (strcmp(mpctx->term_osd_subs ? mpctx->term_osd_subs : "", text) == 0)
         return;
@@ -192,7 +207,7 @@ static char *get_term_status_msg(struct MPContext *mpctx)
         saddf(&line, " x%4.2f", opts->playback_speed);
 
     // A-V sync
-    if (mpctx->ao_chain && mpctx->vo_chain && !mpctx->vo_chain->is_coverart) {
+    if (mpctx->ao_chain && mpctx->vo_chain && !mpctx->vo_chain->is_sparse) {
         saddf(&line, " A-V:%7.3f", mpctx->last_av_difference);
         if (fabs(mpctx->total_avsync_change) > 0.05)
             saddf(&line, " ct:%7.3f", mpctx->total_avsync_change);
@@ -220,7 +235,8 @@ static char *get_term_status_msg(struct MPContext *mpctx)
             int64_t c = vo_get_drop_count(mpctx->video_out);
             struct mp_decoder_wrapper *dec = mpctx->vo_chain->track
                                         ? mpctx->vo_chain->track->dec : NULL;
-            int dropped_frames = dec ? dec->dropped_frames : 0;
+            int dropped_frames =
+                dec ? mp_decoder_wrapper_get_frames_dropped(dec) : 0;
             if (c > 0 || dropped_frames > 0) {
                 saddf(&line, " Dropped: %"PRId64, c);
                 if (dropped_frames)
@@ -232,20 +248,22 @@ static char *get_term_status_msg(struct MPContext *mpctx)
     if (mpctx->demuxer && demux_is_network_cached(mpctx->demuxer)) {
         saddf(&line, " Cache: ");
 
-        struct demux_ctrl_reader_state s = {.ts_duration = -1};
-        demux_control(mpctx->demuxer, DEMUXER_CTRL_GET_READER_STATE, &s);
+        struct demux_reader_state s;
+        demux_get_reader_state(mpctx->demuxer, &s);
 
         if (s.ts_duration < 0) {
             saddf(&line, "???");
+        } else if (s.ts_duration < 10) {
+            saddf(&line, "%2.1fs", s.ts_duration);
         } else {
             saddf(&line, "%2ds", (int)s.ts_duration);
         }
         int64_t cache_size = s.fw_bytes;
         if (cache_size > 0) {
             if (cache_size >= 1024 * 1024) {
-                saddf(&line, "+%lldMB", (long long)(cache_size / 1024 / 1024));
+                saddf(&line, "/%lldMB", (long long)(cache_size / 1024 / 1024));
             } else {
-                saddf(&line, "+%lldKB", (long long)(cache_size / 1024));
+                saddf(&line, "/%lldKB", (long long)(cache_size / 1024));
             }
         }
     }
@@ -257,6 +275,7 @@ static void term_osd_print_status_lazy(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
 
+    term_osd_update_title(mpctx);
     update_window_title(mpctx, false);
     update_vo_playback_state(mpctx);
 
@@ -352,26 +371,22 @@ static void update_osd_bar(struct MPContext *mpctx, int type,
 
 void set_osd_bar_chapters(struct MPContext *mpctx, int type)
 {
-    struct MPOpts *opts = mpctx->opts;
     if (mpctx->osd_progbar.type != type)
         return;
 
     mpctx->osd_progbar.num_stops = 0;
     double len = get_time_length(mpctx);
     if (len > 0) {
-        double ab_loop_start_time = get_ab_loop_start_time(mpctx);
-        if (opts->ab_loop[0] != MP_NOPTS_VALUE ||
-            (ab_loop_start_time != MP_NOPTS_VALUE &&
-               opts->ab_loop[1] != MP_NOPTS_VALUE))
-        {
-            MP_TARRAY_APPEND(mpctx, mpctx->osd_progbar.stops,
-                        mpctx->osd_progbar.num_stops, ab_loop_start_time / len);
+        // Always render the loop points, even if they're incomplete.
+        double ab[2];
+        bool valid = get_ab_loop_times(mpctx, ab);
+        for (int n = 0; n < 2; n++) {
+            if (ab[n] != MP_NOPTS_VALUE) {
+                MP_TARRAY_APPEND(mpctx, mpctx->osd_progbar.stops,
+                                 mpctx->osd_progbar.num_stops, ab[n] / len);
+            }
         }
-        if (opts->ab_loop[1] != MP_NOPTS_VALUE) {
-            MP_TARRAY_APPEND(mpctx, mpctx->osd_progbar.stops,
-                        mpctx->osd_progbar.num_stops, opts->ab_loop[1] / len);
-        }
-        if (mpctx->osd_progbar.num_stops == 0) {
+        if (!valid) {
             int num = get_chapter_count(mpctx);
             for (int n = 0; n < num; n++) {
                 double time = chapter_start_time(mpctx, n);

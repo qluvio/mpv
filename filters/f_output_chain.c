@@ -33,7 +33,7 @@ struct chain {
     struct mp_user_filter **user_filters;
     int num_user_filters;
 
-    // Concatentated list of pre+user+post filters.
+    // Concatenated list of pre+user+post filters.
     struct mp_user_filter **all_filters;
     int num_all_filters;
     // First input/last output of all_filters[].
@@ -88,9 +88,6 @@ static void update_output_caps(struct chain *p)
             if (allowed_output_formats[n])
                 mp_autoconvert_add_imgfmt(p->convert, IMGFMT_START + n, 0);
         }
-
-        if (p->vo->hwdec_devs)
-            mp_autoconvert_add_vo_hwdec_subfmts(p->convert, p->vo->hwdec_devs);
     }
 }
 
@@ -457,13 +454,12 @@ bool mp_output_chain_command(struct mp_output_chain *c, const char *target,
 // supports it, reset *speed, then keep setting the speed on the other filters.
 // The purpose of this is to make sure only 1 filter changes speed.
 static void set_speed_any(struct mp_user_filter **filters, int num_filters,
-                          bool resample, double *speed)
+                          int command, double *speed)
 {
     for (int n = num_filters - 1; n >= 0; n--) {
         assert(*speed);
         struct mp_filter_command cmd = {
-            .type = resample ? MP_FILTER_COMMAND_SET_SPEED_RESAMPLE
-                             : MP_FILTER_COMMAND_SET_SPEED,
+            .type = command,
             .speed = *speed,
         };
         if (mp_filter_command(filters[n]->f, &cmd))
@@ -472,17 +468,24 @@ static void set_speed_any(struct mp_user_filter **filters, int num_filters,
 }
 
 void mp_output_chain_set_audio_speed(struct mp_output_chain *c,
-                                     double speed, double resample)
+                                     double speed, double resample, double drop)
 {
     struct chain *p = c->f->priv;
 
     // We always resample with the final libavresample instance.
-    set_speed_any(p->post_filters, p->num_post_filters, true, &resample);
+    set_speed_any(p->post_filters, p->num_post_filters,
+                  MP_FILTER_COMMAND_SET_SPEED_RESAMPLE, &resample);
 
     // If users have filters like "scaletempo" insert anywhere, use that,
     // otherwise use the builtin ones.
-    set_speed_any(p->user_filters, p->num_user_filters, false, &speed);
-    set_speed_any(p->post_filters, p->num_post_filters, false, &speed);
+    set_speed_any(p->user_filters, p->num_user_filters,
+                  MP_FILTER_COMMAND_SET_SPEED, &speed);
+    set_speed_any(p->post_filters, p->num_post_filters,
+                  MP_FILTER_COMMAND_SET_SPEED, &speed);
+    set_speed_any(p->user_filters, p->num_user_filters,
+                  MP_FILTER_COMMAND_SET_SPEED_DROP, &drop);
+    set_speed_any(p->post_filters, p->num_post_filters,
+                  MP_FILTER_COMMAND_SET_SPEED_DROP, &drop);
 }
 
 double mp_output_get_measured_total_delay(struct mp_output_chain *c)
@@ -502,33 +505,6 @@ double mp_output_get_measured_total_delay(struct mp_output_chain *c)
     }
 
     return delay;
-}
-
-static bool compare_filter(struct m_obj_settings *a, struct m_obj_settings *b)
-{
-    if (a == b || !a || !b)
-        return a == b;
-
-    if (!a->name || !b->name)
-        return a->name == b->name;
-
-    if (!!a->label != !!b->label || (a->label && strcmp(a->label, b->label) != 0))
-        return false;
-
-    if (a->enabled != b->enabled)
-        return false;
-
-    if (!a->attribs || !a->attribs[0])
-        return !b->attribs || !b->attribs[0];
-
-    for (int n = 0; a->attribs[n] || b->attribs[n]; n++) {
-        if (!a->attribs[n] || !b->attribs[n])
-            return false;
-        if (strcmp(a->attribs[n], b->attribs[n]) != 0)
-            return false;
-    }
-
-    return true;
 }
 
 bool mp_output_chain_update_filters(struct mp_output_chain *c,
@@ -551,7 +527,8 @@ bool mp_output_chain_update_filters(struct mp_output_chain *c,
         struct mp_user_filter *u = NULL;
 
         for (int i = 0; i < p->num_user_filters; i++) {
-            if (!used[i] && compare_filter(entry, p->user_filters[i]->args)) {
+            if (!used[i] && m_obj_settings_equal(entry, p->user_filters[i]->args))
+            {
                 u = p->user_filters[i];
                 used[i] = true;
                 break;

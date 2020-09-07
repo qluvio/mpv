@@ -163,7 +163,7 @@ static void disable_power_management(struct vo_cocoa_state *s)
 }
 
 static const char macosx_icon[] =
-#include "osdep/macosx_icon.inc"
+#include "generated/TOOLS/osxbundle/mpv.app/Contents/Resources/icon.icns.inc"
 ;
 
 static void set_application_icon(NSApplication *app)
@@ -395,8 +395,10 @@ void vo_cocoa_init(struct vo *vo)
     cocoa_add_event_monitor(vo);
 
     if (!s->embedded) {
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        set_application_icon(NSApp);
+        run_on_main_thread(vo, ^{
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+            set_application_icon(NSApp);
+        });
     }
 }
 
@@ -867,15 +869,6 @@ static int vo_cocoa_control_on_main_thread(struct vo *vo, int request, void *arg
     struct vo_cocoa_state *s = vo->cocoa;
 
     switch (request) {
-    case VOCTRL_FULLSCREEN:
-        return vo_cocoa_fullscreen(vo);
-    case VOCTRL_GET_FULLSCREEN:
-        *(int *)arg = s->fullscreen;
-        return VO_TRUE;
-    case VOCTRL_ONTOP:
-        return vo_cocoa_ontop(vo);
-    case VOCTRL_BORDER:
-        return vo_cocoa_window_border(vo);
     case VOCTRL_GET_UNFS_WINDOW_SIZE: {
         int *sz = arg;
         NSRect rect = (s->fullscreen || vo->opts->fullscreen) ?
@@ -892,11 +885,6 @@ static int vo_cocoa_control_on_main_thread(struct vo *vo, int request, void *arg
         if(vo->opts->hidpi_window_scale)
             r = [s->current_screen convertRectToBacking:r];
         queue_new_video_size(vo, r.size.width, r.size.height);
-        return VO_TRUE;
-    }
-    case VOCTRL_GET_WIN_STATE: {
-        const bool minimized = [[s->view window] isMiniaturized];
-        *(int *)arg = minimized ? VO_WIN_STATE_MINIMIZED : 0;
         return VO_TRUE;
     }
     case VOCTRL_SET_CURSOR_VISIBILITY:
@@ -1048,7 +1036,6 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 {
     struct vo_cocoa_state *s = self.vout->cocoa;
     s->fullscreen = 1;
-    s->pending_events |= VO_EVENT_FULLSCREEN_STATE;
     vo_cocoa_anim_unlock(self.vout);
 }
 
@@ -1056,7 +1043,6 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 {
     struct vo_cocoa_state *s = self.vout->cocoa;
     s->fullscreen = 0;
-    s->pending_events |= VO_EVENT_FULLSCREEN_STATE;
     vo_cocoa_anim_unlock(self.vout);
 }
 
@@ -1107,16 +1093,6 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 - (void)windowDidBecomeKey:(NSNotification *)notification
 {
     vo_cocoa_update_cursor_visibility(self.vout, false);
-}
-
-- (void)windowDidMiniaturize:(NSNotification *)notification
-{
-    flag_events(self.vout, VO_EVENT_WIN_STATE);
-}
-
-- (void)windowDidDeminiaturize:(NSNotification *)notification
-{
-    flag_events(self.vout, VO_EVENT_WIN_STATE);
 }
 
 - (void)windowWillMove:(NSNotification *)notification

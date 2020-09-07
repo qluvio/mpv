@@ -21,17 +21,27 @@
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
-#include <sys/vt.h>
 #include <unistd.h>
 #include <limits.h>
 #include <math.h>
+#include <time.h>
+
+#include "config.h"
+
+#if HAVE_CONSIO_H
+#include <sys/consio.h>
+#else
+#include <sys/vt.h>
+#endif
 
 #include "drm_common.h"
 
 #include "common/common.h"
 #include "common/msg.h"
 #include "osdep/io.h"
+#include "osdep/timer.h"
 #include "misc/ctype.h"
+#include "video/out/vo.h"
 
 #define EVT_RELEASE 1
 #define EVT_ACQUIRE 2
@@ -61,27 +71,27 @@ static double mode_get_Hz(const drmModeModeInfo *mode);
 #define OPT_BASE_STRUCT struct drm_opts
 const struct m_sub_options drm_conf = {
     .opts = (const struct m_option[]) {
-        OPT_STRING_VALIDATE("drm-connector", drm_connector_spec,
-                            0, drm_validate_connector_opt),
-        OPT_STRING_VALIDATE("drm-mode", drm_mode_spec,
-                            0, drm_validate_mode_opt),
-        OPT_CHOICE("drm-atomic", drm_atomic, 0,
-                   ({"no", 0},
-                    {"auto", 1})),
-        OPT_CHOICE_OR_INT("drm-draw-plane", drm_draw_plane, 0, 0, INT_MAX,
-                          ({"primary", DRM_OPTS_PRIMARY_PLANE},
-                           {"overlay", DRM_OPTS_OVERLAY_PLANE})),
-        OPT_CHOICE_OR_INT("drm-drmprime-video-plane", drm_drmprime_video_plane, 0, 0, INT_MAX,
-                          ({"primary", DRM_OPTS_PRIMARY_PLANE},
-                           {"overlay", DRM_OPTS_OVERLAY_PLANE})),
-        OPT_CHOICE("drm-format", drm_format, 0,
-                   ({"xrgb8888",    DRM_OPTS_FORMAT_XRGB8888},
-                    {"xrgb2101010", DRM_OPTS_FORMAT_XRGB2101010})),
-        OPT_SIZE_BOX("drm-draw-surface-size", drm_draw_surface_size, 0),
+        {"drm-connector", OPT_STRING_VALIDATE(drm_connector_spec,
+                                               drm_validate_connector_opt)},
+        {"drm-mode", OPT_STRING_VALIDATE(drm_mode_spec,
+                                          drm_validate_mode_opt)},
+        {"drm-atomic", OPT_CHOICE(drm_atomic, {"no", 0}, {"auto", 1})},
+        {"drm-draw-plane", OPT_CHOICE(drm_draw_plane,
+            {"primary", DRM_OPTS_PRIMARY_PLANE},
+            {"overlay", DRM_OPTS_OVERLAY_PLANE}),
+            M_RANGE(0, INT_MAX)},
+        {"drm-drmprime-video-plane", OPT_CHOICE(drm_drmprime_video_plane,
+            {"primary", DRM_OPTS_PRIMARY_PLANE},
+            {"overlay", DRM_OPTS_OVERLAY_PLANE}),
+            M_RANGE(0, INT_MAX)},
+        {"drm-format", OPT_CHOICE(drm_format,
+            {"xrgb8888",    DRM_OPTS_FORMAT_XRGB8888},
+            {"xrgb2101010", DRM_OPTS_FORMAT_XRGB2101010})},
+        {"drm-draw-surface-size", OPT_SIZE_BOX(drm_draw_surface_size)},
 
-        OPT_REPLACED("drm-osd-plane-id", "drm-draw-plane"),
-        OPT_REPLACED("drm-video-plane-id", "drm-drmprime-video-plane"),
-        OPT_REPLACED("drm-osd-size", "drm-draw-surface-size"),
+        {"drm-osd-plane-id", OPT_REPLACED("drm-draw-plane")},
+        {"drm-video-plane-id", OPT_REPLACED("drm-drmprime-video-plane")},
+        {"drm-osd-size", OPT_REPLACED("drm-draw-surface-size")},
         {0},
     },
     .defaults = &(const struct drm_opts) {
@@ -475,6 +485,10 @@ static bool setup_mode(struct kms *kms, const char *mode_spec)
         goto err;
     }
 
+    drmModeModeInfo *mode = &kms->mode.mode;
+    MP_VERBOSE(kms, "Selected mode: %s (%dx%d@%.2fHz)\n",
+        mode->name, mode->hdisplay, mode->vdisplay, mode_get_Hz(mode));
+
     return true;
 
 err:
@@ -535,6 +549,20 @@ struct kms *kms_create(struct mp_log *log, const char *connector_spec,
         mp_err(log, "Cannot open card \"%d\": %s.\n",
                card_no, mp_strerror(errno));
         goto err;
+    }
+
+    char *devname = drmGetDeviceNameFromFd(kms->fd);
+    if (devname) {
+        mp_verbose(log, "Device name: %s\n", devname);
+        drmFree(devname);
+    }
+
+    drmVersionPtr ver = drmGetVersion(kms->fd);
+    if (ver) {
+        mp_verbose(log, "Driver: %s %d.%d.%d (%s)\n", ver->name,
+            ver->version_major, ver->version_minor, ver->version_patchlevel,
+            ver->date);
+        drmFreeVersion(ver);
     }
 
     res = drmModeGetResources(kms->fd);
@@ -605,7 +633,10 @@ void kms_destroy(struct kms *kms)
 
 static double mode_get_Hz(const drmModeModeInfo *mode)
 {
-    return mode->clock * 1000.0 / mode->htotal / mode->vtotal;
+    double rate = mode->clock * 1000.0 / mode->htotal / mode->vtotal;
+    if (mode->flags & DRM_MODE_FLAG_INTERLACE)
+        rate *= 2.0;
+    return rate;
 }
 
 static void kms_show_available_modes(
@@ -805,7 +836,7 @@ bool vt_switcher_init(struct vt_switcher *s, struct mp_log *log)
         return false;
     }
 
-    struct vt_mode vt_mode;
+    struct vt_mode vt_mode = { 0 };
     if (ioctl(s->tty_fd, VT_GETMODE, &vt_mode) < 0) {
         MP_ERR(s, "VT_GETMODE failed: %s\n", mp_strerror(errno));
         return false;
@@ -814,6 +845,9 @@ bool vt_switcher_init(struct vt_switcher *s, struct mp_log *log)
     vt_mode.mode = VT_PROCESS;
     vt_mode.relsig = RELEASE_SIGNAL;
     vt_mode.acqsig = ACQUIRE_SIGNAL;
+    // frsig is a signal for forced release. Not implemented on Linux,
+    // Solaris, BSDs but must be set to a valid signal on some of those.
+    vt_mode.frsig = SIGIO; // unused
     if (ioctl(s->tty_fd, VT_SETMODE, &vt_mode) < 0) {
         MP_ERR(s, "VT_SETMODE failed: %s\n", mp_strerror(errno));
         return false;
@@ -899,4 +933,58 @@ void vt_switcher_poll(struct vt_switcher *s, int timeout_ms)
     case EVT_INTERRUPT:
         break;
     }
+}
+
+void drm_pflip_cb(int fd, unsigned int msc, unsigned int sec,
+                  unsigned int usec, void *data)
+{
+    struct drm_pflip_cb_closure *closure = data;
+
+    struct drm_vsync_tuple *vsync = closure->vsync;
+    // frame_vsync->ust is the timestamp of the pageflip that happened just before this flip was queued
+    // frame_vsync->msc is the sequence number of the pageflip that happened just before this flip was queued
+    // frame_vsync->sbc is the sequence number for the frame that was just flipped to screen
+    struct drm_vsync_tuple *frame_vsync = closure->frame_vsync;
+    struct vo_vsync_info *vsync_info = closure->vsync_info;
+
+    const bool ready =
+        (vsync->msc != 0) &&
+        (frame_vsync->ust != 0) && (frame_vsync->msc != 0);
+
+    const uint64_t ust = (sec * 1000000LL) + usec;
+
+    const unsigned int msc_since_last_flip = msc - vsync->msc;
+    if (ready && msc == vsync->msc) {
+        // Seems like some drivers only increment msc every other page flip when
+        // running in interlaced mode (I'm looking at you nouveau). Obviously we
+        // can't work with this, so shame the driver and bail.
+        mp_err(closure->log,
+               "Got the same msc value twice: (msc: %u, vsync->msc: %u). This shouldn't happen. Possibly broken driver/interlaced mode?\n",
+               msc, vsync->msc);
+        goto fail;
+    }
+
+    vsync->ust = ust;
+    vsync->msc = msc;
+
+    if (ready) {
+        // Convert to mp_time
+        struct timespec ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts))
+            goto fail;
+        const uint64_t now_monotonic = ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+        const uint64_t ust_mp_time = mp_time_us() - (now_monotonic - vsync->ust);
+
+        const uint64_t     ust_since_enqueue = vsync->ust - frame_vsync->ust;
+        const unsigned int msc_since_enqueue = vsync->msc - frame_vsync->msc;
+        const unsigned int sbc_since_enqueue = vsync->sbc - frame_vsync->sbc;
+
+        vsync_info->vsync_duration = ust_since_enqueue / msc_since_enqueue;
+        vsync_info->skipped_vsyncs = msc_since_last_flip - 1; // Valid iff swap_buffers is called every vsync
+        vsync_info->last_queue_display_time = ust_mp_time + (sbc_since_enqueue * vsync_info->vsync_duration);
+    }
+
+fail:
+    *closure->waiting_for_flip = false;
+    talloc_free(closure);
 }

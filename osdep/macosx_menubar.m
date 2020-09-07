@@ -144,6 +144,12 @@
                         @"key"        : @"O",
                         @"target"     : self
                     }],
+                    [NSMutableDictionary dictionaryWithDictionary:@{
+                        @"name"       : @"Open Playlist…",
+                        @"action"     : @"openPlaylist",
+                        @"key"        : @"",
+                        @"target"     : self
+                    }],
                     @{ @"name": @"separator" },
                     [NSMutableDictionary dictionaryWithDictionary:@{
                         @"name"       : @"Close",
@@ -587,7 +593,16 @@
                         @"action"     : @"url:",
                         @"key"        : @"",
                         @"target"     : self,
-                        @"url"        : @"https://github.com/mpv-player/mpv/issues/new"
+                        @"url"        : @"https://github.com/mpv-player/mpv/issues/new/choose"
+                    }],
+                    [NSMutableDictionary dictionaryWithDictionary:@{
+                        @"name"       : @"Show log File…",
+                        @"action"     : @"showFile:",
+                        @"key"        : @"",
+                        @"target"     : self,
+                        @"file"       : @"~/Library/Logs/mpv.log",
+                        @"alertTitle" : @"No log File found.",
+                        @"alertText"  : @"You deactivated logging for the Bundle."
                     }]
                 ]
             }
@@ -603,6 +618,7 @@
 {
     NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"MainMenu"];
     [NSApp setServicesMenu:[[NSMenu alloc] init]];
+    NSString* bundle = [[[NSProcessInfo processInfo] environment] objectForKey:@"MPVBUNDLE"];
 
     for(id mMenu in menuTree) {
         NSMenu *menu = [[NSMenu alloc] initWithTitle:mMenu[@"name"]];
@@ -612,17 +628,25 @@
         [mainMenu setSubmenu:menu forItem:mItem];
 
         for(id subMenu in mMenu[@"menu"]) {
+            NSString *name = subMenu[@"name"];
+            NSString *action = subMenu[@"action"];
+
 #if HAVE_MACOS_TOUCHBAR
-            if ([subMenu[@"action"] isEqual:@"toggleTouchBarCustomizationPalette:"]) {
+            if ([action isEqual:@"toggleTouchBarCustomizationPalette:"]) {
                 if (![NSApp respondsToSelector:@selector(touchBar)])
                     continue;
             }
 #endif
-            if ([subMenu[@"name"] isEqual:@"separator"]) {
+
+            if ([name isEqual:@"Show log File…"] && ![bundle isEqual:@"true"]) {
+                continue;
+            }
+
+            if ([name isEqual:@"separator"]) {
                 [menu addItem:[NSMenuItem separatorItem]];
             } else {
-                NSMenuItem *iItem = [menu addItemWithTitle:subMenu[@"name"]
-                               action:NSSelectorFromString(subMenu[@"action"])
+                NSMenuItem *iItem = [menu addItemWithTitle:name
+                               action:NSSelectorFromString(action)
                         keyEquivalent:subMenu[@"key"]];
                 [iItem setTarget:subMenu[@"target"]];
                 [subMenu setObject:iItem forKey:@"menuItem"];
@@ -703,6 +727,17 @@
     }
 }
 
+- (void)openPlaylist
+{
+    NSOpenPanel *panel = [[NSOpenPanel alloc] init];
+
+    if ([panel runModal] == NSModalResponseOK){
+        NSString *pl = [NSString stringWithFormat:@"loadlist \"%@\"",
+                                                  [panel URLs][0].path];
+        [(Application *)NSApp queueCommand:(char *)[pl UTF8String]];
+    }
+}
+
 - (void)openURL
 {
     NSAlert *alert = [[NSAlert alloc] init];
@@ -735,6 +770,25 @@
 {
     NSString *url = [self getDictFromMenuItem:menuItem][@"url"];
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:url]];
+}
+
+- (void)showFile:(NSMenuItem *)menuItem
+{
+    NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSMutableDictionary *mItemDict = [self getDictFromMenuItem:menuItem];
+    NSString *file = [mItemDict[@"file"] stringByExpandingTildeInPath];
+
+    if ([fileManager fileExistsAtPath:file]){
+        NSURL *url = [NSURL fileURLWithPath:file];
+        NSArray *urlArray = [NSArray arrayWithObjects:url, nil];
+
+        [workspace activateFileViewerSelectingURLs:urlArray];
+        return;
+    }
+
+    [self alertWithTitle:mItemDict[@"alertTitle"]
+                 andText:mItemDict[@"alertText"]];
 }
 
 - (void)alertWithTitle:(NSString *)title andText:(NSString *)text

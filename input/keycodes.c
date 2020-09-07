@@ -102,20 +102,31 @@ static const struct key_name key_names[] = {
   { MP_MBTN_MID_DBL, "MBTN_MID_DBL" },
   { MP_MBTN_RIGHT_DBL, "MBTN_RIGHT_DBL" },
 
-  { MP_AR_PLAY,         "AR_PLAY" },
-  { MP_AR_PLAY_HOLD,    "AR_PLAY_HOLD" },
-  { MP_AR_CENTER,       "AR_CENTER" },
-  { MP_AR_CENTER_HOLD,  "AR_CENTER_HOLD" },
-  { MP_AR_NEXT,         "AR_NEXT" },
-  { MP_AR_NEXT_HOLD,    "AR_NEXT_HOLD" },
-  { MP_AR_PREV,         "AR_PREV" },
-  { MP_AR_PREV_HOLD,    "AR_PREV_HOLD" },
-  { MP_AR_MENU,         "AR_MENU" },
-  { MP_AR_MENU_HOLD,    "AR_MENU_HOLD" },
-  { MP_AR_VUP,          "AR_VUP" },
-  { MP_AR_VUP_HOLD,     "AR_VUP_HOLD" },
-  { MP_AR_VDOWN,        "AR_VDOWN" },
-  { MP_AR_VDOWN_HOLD,   "AR_VDOWN_HOLD" },
+  { MP_KEY_GAMEPAD_ACTION_DOWN, "GAMEPAD_ACTION_DOWN" },
+  { MP_KEY_GAMEPAD_ACTION_RIGHT, "GAMEPAD_ACTION_RIGHT" },
+  { MP_KEY_GAMEPAD_ACTION_LEFT, "GAMEPAD_ACTION_LEFT" },
+  { MP_KEY_GAMEPAD_ACTION_UP, "GAMEPAD_ACTION_UP" },
+  { MP_KEY_GAMEPAD_BACK, "GAMEPAD_BACK" },
+  { MP_KEY_GAMEPAD_MENU, "GAMEPAD_MENU" },
+  { MP_KEY_GAMEPAD_START, "GAMEPAD_START" },
+  { MP_KEY_GAMEPAD_LEFT_SHOULDER, "GAMEPAD_LEFT_SHOULDER" },
+  { MP_KEY_GAMEPAD_RIGHT_SHOULDER, "GAMEPAD_RIGHT_SHOULDER" },
+  { MP_KEY_GAMEPAD_LEFT_TRIGGER, "GAMEPAD_LEFT_TRIGGER" },
+  { MP_KEY_GAMEPAD_RIGHT_TRIGGER, "GAMEPAD_RIGHT_TRIGGER" },
+  { MP_KEY_GAMEPAD_LEFT_STICK, "GAMEPAD_LEFT_STICK" },
+  { MP_KEY_GAMEPAD_RIGHT_STICK, "GAMEPAD_RIGHT_STICK" },
+  { MP_KEY_GAMEPAD_DPAD_UP, "GAMEPAD_DPAD_UP" },
+  { MP_KEY_GAMEPAD_DPAD_DOWN, "GAMEPAD_DPAD_DOWN" },
+  { MP_KEY_GAMEPAD_DPAD_LEFT, "GAMEPAD_DPAD_LEFT" },
+  { MP_KEY_GAMEPAD_DPAD_RIGHT, "GAMEPAD_DPAD_RIGHT" },
+  { MP_KEY_GAMEPAD_LEFT_STICK_UP, "GAMEPAD_LEFT_STICK_UP" },
+  { MP_KEY_GAMEPAD_LEFT_STICK_DOWN, "GAMEPAD_LEFT_STICK_DOWN" },
+  { MP_KEY_GAMEPAD_LEFT_STICK_LEFT, "GAMEPAD_LEFT_STICK_LEFT" },
+  { MP_KEY_GAMEPAD_LEFT_STICK_RIGHT, "GAMEPAD_LEFT_STICK_RIGHT" },
+  { MP_KEY_GAMEPAD_RIGHT_STICK_UP, "GAMEPAD_RIGHT_STICK_UP" },
+  { MP_KEY_GAMEPAD_RIGHT_STICK_DOWN, "GAMEPAD_RIGHT_STICK_DOWN" },
+  { MP_KEY_GAMEPAD_RIGHT_STICK_LEFT, "GAMEPAD_RIGHT_STICK_LEFT" },
+  { MP_KEY_GAMEPAD_RIGHT_STICK_RIGHT, "GAMEPAD_RIGHT_STICK_RIGHT" },
 
   { MP_KEY_POWER,       "POWER" },
   { MP_KEY_MENU,        "MENU" },
@@ -140,6 +151,8 @@ static const struct key_name key_names[] = {
   { MP_KEY_RECORD,      "RECORD" },
   { MP_KEY_CHANNEL_UP,  "CHANNEL_UP" },
   { MP_KEY_CHANNEL_DOWN,"CHANNEL_DOWN" },
+  { MP_KEY_PLAYONLY,    "PLAYONLY" },
+  { MP_KEY_PAUSEONLY,   "PAUSEONLY" },
 
   // These are kept for backward compatibility
   { MP_KEY_PAUSE,   "XF86_PAUSE" },
@@ -182,6 +195,7 @@ static const struct key_name key_names[] = {
   { MP_KEY_MOUSE_ENTER, "MOUSE_ENTER" },
 
   { MP_KEY_UNMAPPED,    "UNMAPPED" },
+  { MP_KEY_ANY_UNICODE, "ANY_UNICODE" },
 
   { 0, NULL }
 };
@@ -245,8 +259,7 @@ static void mp_input_append_key_name(bstr *buf, int key)
         }
     }
 
-    // printable, and valid unicode range
-    if (key >= 32 && key <= 0x10FFFF) {
+    if (MP_KEY_IS_UNICODE(key)) {
         mp_append_utf8_bstr(NULL, buf, key);
         return;
     }
@@ -307,6 +320,16 @@ void mp_print_key_list(struct mp_log *out)
     mp_info(out, "\n");
     for (int i = 0; key_names[i].name != NULL; i++)
         mp_info(out, "%s\n", key_names[i].name);
+}
+
+char **mp_get_key_list(void)
+{
+    char **list = NULL;
+    int num = 0;
+    for (int i = 0; key_names[i].name != NULL; i++)
+        MP_TARRAY_APPEND(NULL, list, num, talloc_strdup(NULL, key_names[i].name));
+    MP_TARRAY_APPEND(NULL, list, num, NULL);
+    return list;
 }
 
 int mp_normalize_keycode(int keycode)

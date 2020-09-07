@@ -13,14 +13,12 @@ def __get_cc_env_vars__(cc):
 
 def __test_and_add_flags__(ctx, flags):
     for flag in flags:
-        ctx.check_cc(cflags=flag, uselib_store="compiler", mandatory=False)
-    ctx.env.CFLAGS += ctx.env.CFLAGS_compiler
+        if ctx.check_cc(cflags='-Werror ' + flag, mandatory=False):
+            ctx.env.CFLAGS += [flag]
 
 def __add_generic_flags__(ctx):
     ctx.env.CFLAGS += ["-D_ISOC99_SOURCE", "-D_GNU_SOURCE",
-                       "-D_LARGEFILE_SOURCE", "-D_FILE_OFFSET_BITS=64",
-                       "-D_LARGEFILE64_SOURCE",
-                       "-Wall"]
+                       "-D_FILE_OFFSET_BITS=64", "-Wall"]
 
     if ctx.check_cc(cflags="-std=c11", mandatory=False):
         ctx.env.CFLAGS += ["-std=c11"]
@@ -42,7 +40,11 @@ def __add_generic_flags__(ctx):
                                  "-Wno-format-zero-length",
                                  "-Werror=format-security",
                                  "-Wno-redundant-decls",
-                                 "-Wvla"])
+                                 "-Wvla",
+                                 "-Wno-format-truncation",
+                                 "-Wimplicit-fallthrough",
+                                 ])
+    __test_and_add_flags__(ctx, ["-fno-math-errno"])
 
 def __add_gcc_flags__(ctx):
     ctx.env.CFLAGS += ["-Wall", "-Wundef", "-Wmissing-prototypes", "-Wshadow",
@@ -54,7 +56,7 @@ def __add_gcc_flags__(ctx):
 def __add_clang_flags__(ctx):
     ctx.env.CFLAGS += ["-Wno-logical-op-parentheses", "-fcolor-diagnostics",
                        "-Wno-tautological-compare",
-                       "-Wno-tautological-constant-out-of-range-compare" ]
+                       "-Wno-tautological-constant-out-of-range-compare"]
 
 def __add_mswin_flags__(ctx):
     ctx.env.CFLAGS += ['-D_WIN32_WINNT=0x0602', '-DUNICODE', '-DCOBJMACROS',
@@ -64,8 +66,8 @@ def __add_mswin_flags__(ctx):
 
 def __add_mingw_flags__(ctx):
     __add_mswin_flags__(ctx)
-    ctx.env.CFLAGS += ['-municode', '-D__USE_MINGW_ANSI_STDIO=1']
-    ctx.env.LAST_LINKFLAGS += ['-municode', '-mwindows']
+    ctx.env.CFLAGS += ['-D__USE_MINGW_ANSI_STDIO=1']
+    ctx.env.LAST_LINKFLAGS += ['-mwindows']
 
 def __add_cygwin_flags__(ctx):
     __add_mswin_flags__(ctx)

@@ -27,6 +27,7 @@
 
 #include "options/m_config.h"
 #include "config.h"
+#include "osdep/terminal.h"
 #include "vo.h"
 #include "sub/osd.h"
 #include "video/sws_utils.h"
@@ -36,15 +37,15 @@
 
 #define ALGO_PLAIN 1
 #define ALGO_HALF_BLOCKS 2
-#define ESC_HIDE_CURSOR "\e[?25l"
-#define ESC_RESTORE_CURSOR "\e[?25h"
-#define ESC_CLEAR_SCREEN "\e[2J"
-#define ESC_CLEAR_COLORS "\e[0m"
-#define ESC_GOTOXY "\e[%d;%df"
-#define ESC_COLOR_BG "\e[48;2;%d;%d;%dm"
-#define ESC_COLOR_FG "\e[38;2;%d;%d;%dm"
-#define ESC_COLOR256_BG "\e[48;5;%dm"
-#define ESC_COLOR256_FG "\e[38;5;%dm"
+#define ESC_HIDE_CURSOR "\033[?25l"
+#define ESC_RESTORE_CURSOR "\033[?25h"
+#define ESC_CLEAR_SCREEN "\033[2J"
+#define ESC_CLEAR_COLORS "\033[0m"
+#define ESC_GOTOXY "\033[%d;%df"
+#define ESC_COLOR_BG "\033[48;2;%d;%d;%dm"
+#define ESC_COLOR_FG "\033[38;2;%d;%d;%dm"
+#define ESC_COLOR256_BG "\033[48;5;%dm"
+#define ESC_COLOR256_FG "\033[38;5;%dm"
 #define DEFAULT_WIDTH 80
 #define DEFAULT_HEIGHT 25
 
@@ -58,12 +59,12 @@ struct vo_tct_opts {
 #define OPT_BASE_STRUCT struct vo_tct_opts
 static const struct m_sub_options vo_tct_conf = {
     .opts = (const m_option_t[]) {
-        OPT_CHOICE("vo-tct-algo", algo, 0,
-                   ({"plain", ALGO_PLAIN},
-                    {"half-blocks", ALGO_HALF_BLOCKS})),
-        OPT_INT("vo-tct-width", width, 0),
-        OPT_INT("vo-tct-height", height, 0),
-        OPT_FLAG("vo-tct-256", term256, 0),
+        {"vo-tct-algo", OPT_CHOICE(algo,
+            {"plain", ALGO_PLAIN},
+            {"half-blocks", ALGO_HALF_BLOCKS})},
+        {"vo-tct-width", OPT_INT(width)},
+        {"vo-tct-height", OPT_INT(height)},
+        {"vo-tct-256", OPT_FLAG(term256)},
         {0}
     },
     .defaults = &(const struct vo_tct_opts) {
@@ -179,13 +180,8 @@ static void get_win_size(struct vo *vo, int *out_width, int *out_height) {
     struct priv *p = vo->priv;
     *out_width = DEFAULT_WIDTH;
     *out_height = DEFAULT_HEIGHT;
-#if HAVE_POSIX
-    struct winsize winsize;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsize) >= 0) {
-        *out_width = winsize.ws_col;
-        *out_height = winsize.ws_row;
-    }
-#endif
+
+    terminal_get_size(out_width, out_height);
 
     if (p->opts->width > 0)
         *out_width = p->opts->width;
@@ -207,7 +203,6 @@ static int reconfig(struct vo *vo, struct mp_image_params *params)
     if (p->buffer)
         free(p->buffer);
 
-    mp_sws_set_from_cmdline(p->sws, vo->global);
     p->sws->src = *params;
     p->sws->dst = (struct mp_image_params) {
         .imgfmt = IMGFMT,
@@ -265,8 +260,6 @@ static void uninit(struct vo *vo)
     struct priv *p = vo->priv;
     if (p->buffer)
         talloc_free(p->buffer);
-    if (p->sws)
-        talloc_free(p->sws);
 }
 
 static int preinit(struct vo *vo)
@@ -278,6 +271,8 @@ static int preinit(struct vo *vo)
     struct priv *p = vo->priv;
     p->opts = mp_get_config_group(vo, vo->global, &vo_tct_conf);
     p->sws = mp_sws_alloc(vo);
+    p->sws->log = vo->log;
+    mp_sws_enable_cmdline_opts(p->sws, vo->global);
     return 0;
 }
 

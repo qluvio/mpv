@@ -27,11 +27,15 @@ struct macos_opts {
     int macos_title_bar_material;
     struct m_color macos_title_bar_color;
     int macos_fs_animation_duration;
+    int macos_force_dedicated_gpu;
     int cocoa_cb_sw_renderer;
+    int cocoa_cb_10bit_context;
 };
 
 // multithreaded wrapper for mpv_main
 int cocoa_main(int argc, char *argv[]);
 void cocoa_register_menu_item_action(MPMenuKey key, void* action);
+
+extern const struct m_sub_options macos_conf;
 
 #endif /* MPV_MACOSX_APPLICATION */

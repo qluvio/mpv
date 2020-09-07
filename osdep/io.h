@@ -104,8 +104,14 @@ struct dirent *mp_readdir(DIR *dir);
 int mp_closedir(DIR *dir);
 int mp_mkdir(const char *path, int mode);
 char *mp_win32_getcwd(char *buf, size_t size);
-FILE *mp_tmpfile(void);
 char *mp_getenv(const char *name);
+
+#ifdef environ  /* mingw defines it as _environ */
+#undef environ
+#endif
+#define environ (*mp_penviron())  /* ensure initialization and l-value */
+char ***mp_penviron(void);
+
 off_t mp_lseek(int fd, off_t offset, int whence);
 
 // mp_stat types. MSVCRT's dev_t and ino_t are way too short to be unique.
@@ -161,7 +167,6 @@ void mp_globfree(mp_glob_t *pglob);
 #define closedir(...) mp_closedir(__VA_ARGS__)
 #define mkdir(...) mp_mkdir(__VA_ARGS__)
 #define getcwd(...) mp_win32_getcwd(__VA_ARGS__)
-#define tmpfile(...) mp_tmpfile(__VA_ARGS__)
 #define getenv(...) mp_getenv(__VA_ARGS__)
 
 #undef lseek
@@ -173,6 +178,9 @@ void mp_globfree(mp_glob_t *pglob);
 
 #undef fstat
 #define fstat(...) mp_fstat(__VA_ARGS__)
+
+#define utime(...) _utime(__VA_ARGS__)
+#define utimbuf _utimbuf
 
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 int munmap(void *addr, size_t length);
@@ -195,7 +203,6 @@ int msync(void *addr, size_t length, int flags);
 
 // These are stubs since there is not anything that helps with this on Windows.
 #define locale_t int
-#define LC_ALL_MASK 0
 #define LC_CTYPE_MASK 0
 locale_t newlocale(int, const char *, locale_t);
 locale_t uselocale(locale_t);
@@ -205,6 +212,10 @@ void freelocale(locale_t);
 
 #include <sys/mman.h>
 
+extern char **environ;
+
 #endif /* __MINGW32__ */
+
+int mp_mkostemps(char *template, int suffixlen, int flags);
 
 #endif

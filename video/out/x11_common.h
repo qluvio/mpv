@@ -20,14 +20,11 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <pthread.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
-#include "osdep/atomic.h"
-#include "osdep/semaphore.h"
-
 #include "common/common.h"
+#include "osdep/atomic.h"
 
 #include "config.h"
 #if !HAVE_GPL
@@ -44,11 +41,14 @@ struct xrandr_display {
     double fps;
     char *name;
     bool overlaps;
+    int atom_id;
 };
 
 struct vo_x11_state {
     struct mp_log *log;
     struct input_ctx *input_ctx;
+    struct m_config_cache *opts_cache;
+    struct mp_vo_opts *opts;
     Display *display;
     int event_fd;
     int wakeup_pipe[2];
@@ -72,10 +72,6 @@ struct vo_x11_state {
     bool screensaver_enabled;
     bool dpms_touched;
     double screensaver_time_last;
-    pthread_t screensaver_thread;
-    bool screensaver_thread_running;
-    sem_t screensaver_sem;
-    atomic_bool screensaver_terminate;
 
     XIM xim;
     XIC xic;

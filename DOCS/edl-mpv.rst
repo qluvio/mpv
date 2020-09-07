@@ -100,6 +100,18 @@ entries affect all other file entries in the EDL file. Their format is highly
 implementation specific. They should generally follow the file header, and come
 before any file entries.
 
+Disabling chapter generation and copying
+========================================
+
+By default, chapters from the source ranges are copied to the virtual file's
+chapters. Also, a chapter is inserted after each range. This can be disabled
+with the ``no_chapters`` header.
+
+Example::
+
+    !no_chapters
+
+
 MP4 DASH
 ========
 
@@ -131,6 +143,164 @@ The current implementation will
 - not add segment boundaries as chapter points
 - require full compatibility between all segments (same codec etc.)
 
+Another header part of this mechanism is ``no_clip``. This header is similar
+to ``mp4_dash``, but does not include on-demand opening/closing of segments,
+and does not support init segments. It also exists solely to support internal
+ytdl requirements. Using ``no_clip`` with segments is not recommended and
+probably breaks. ``mp4_dash`` already implicitly does a variant of ``no_clip``.
+
+The ``mp4_dash`` and ``no_clip`` headers are not part of the core EDL format.
+They may be changed or removed at any time, depending on mpv's internal
+requirements.
+
+Separate files for tracks
+=========================
+
+The special ``new_stream`` header lets you specify separate parts and time
+offsets for separate tracks. This can for example be used to source audio and
+video track from separate files.
+
+Example::
+
+    # mpv EDL v0
+    video.mkv
+    !new_stream
+    audio.mkv
+
+This adds all tracks from both files to the virtual track list. Upon playback,
+the tracks will be played at the same time, instead of appending them. The files
+can contain more than 1 stream; the apparent effect is the same as if the second
+part after the ``!new_stream`` part were in a separate ``.edl`` file and added
+with ``--external-file``.
+
+Note that all metadata between the stream sets created by ``new_stream`` is
+disjoint. Global metadata is taken from the first part only.
+
+In context of mpv, this is redundant to the ``--audio-file`` and
+``--external-file`` options, but (as of this writing) has the advantage that
+this will use a unified cache for all streams.
+
+The ``new_stream`` header is not part of the core EDL format. It may be changed
+or removed at any time, depending on mpv's internal requirements.
+
+If the first ``!new_stream`` is redundant, it is ignored. This is the same
+example as above::
+
+    # mpv EDL v0
+    !new_stream
+    video.mkv
+    !new_stream
+    audio.mkv
+
+Note that ``!new_stream`` must be the first header. Whether the parser accepts
+(i.e. ignores) or rejects other headers before that is implementation specific.
+
+Track metadata
+==============
+
+The special ``track_meta`` header can set some specific metadata fields of the
+current ``!new_stream`` partition. The tags are applied to all tracks within
+the partition. It is not possible to set the metadata for individual tracks (the
+feature was needed only for single-track media).
+
+It provides following parameters change track metadata:
+
+``lang``
+    Set the language tag.
+
+``title``
+    Set the title tag.
+
+``byterate``
+    Number of bytes per second this stream uses. (Purely informational.)
+
+``index``
+    The numeric index of the track this should map to (default: -1). This is
+    the 0-based index of the virtual stream as seen by the player, enumerating
+    all audio/video/subtitle streams. If nothing matches, this is silently
+    discarded. The special index -1 (the default) has two meanings: if there
+    was a previous meta data entry (either ``!track_meta`` or ``!delay_open``
+    element since the last ``!new_stream``), then this element manipulates
+    the previous meta data entry. If there was no previous entry, a new meta
+    data entry that matches all streams is created.
+
+Example::
+
+    # mpv EDL v0
+    !track_meta,lang=bla,title=blabla
+    file.mkv
+    !new_stream
+    !track_meta,title=ducks
+    sub.srt
+
+If ``file.mkv`` has an audio and a video stream, both will use ``blabla`` as
+title. The subtitle stream will use ``ducks`` as title.
+
+The ``track_meta`` header is not part of the core EDL format. It may be changed
+or removed at any time, depending on mpv's internal requirements.
+
+Delayed media opening
+=====================
+
+The special ``delay_open`` header can be used to open the media URL of the
+stream only when the track is selected for the first time. This is supposed to
+be an optimization to speed up opening of a remote stream if there are many
+tracks for whatever reasons.
+
+This has various tricky restrictions, and also will defer failure to open a
+stream to "later". By design, it's supposed to be used for single-track streams.
+
+Using multiple segments requires you to specify all offsets and durations (also
+it was never tested whether it works at all). Interaction with ``mp4_dash`` may
+be strange.
+
+You can describe multiple sub-tracks by using multiple ``delay_open`` headers
+before the same source URL. (If there are multiple sub-tracks of the same media
+type, then the mapping to the real stream is probably rather arbitrary.) If the
+source contains tracks not described, a warning is logged when the delayed
+opening happens, and the track is hidden.
+
+This has the following parameters:
+
+``media_type``
+    Required. Must be set to ``video``, ``audio``, or ``sub``. (Other tracks in
+    the opened URL are ignored.)
+
+``codec``
+    The mpv codec name that is expected. Although mpv tries to initialize a
+    decoder with it currently (and will fail track selection if it does not
+    initialize successfully), it is not used for decoding - decoding still uses
+    the information retrieved from opening the actual media information, and may
+    be a different codec (you should try to avoid this, of course). Defaults to
+    ``null``.
+
+    Above also applies for similar fields such as ``w``.  These fields are
+    mostly to help with user track pre-selection.
+
+``flags``
+    A ``+`` separated list of boolean flags. Currently defined flags:
+
+        ``default``
+            Set the default track flag.
+
+        ``forced``
+            Set the forced track flag.
+
+    Other values are ignored after triggering a warning.
+
+``w``, ``h``
+    For video codecs: expected video size. See ``codec`` for details.
+
+``fps``
+    For video codecs: expected video framerate, as integer. (The rate is usually
+    only crudely reported, and it makes no sense to expect exact values.)
+
+``samplerate``
+    For audio codecs: expected sample rate, as integer.
+
+The ``delay_open`` header is not part of the core EDL format. It may be changed
+or removed at any time, depending on mpv's internal requirements.
+
 Timestamp format
 ================
 
@@ -138,7 +308,8 @@ Currently, time values are floating point values in seconds.
 
 As an extension, you can set the ``timestamps=chapters`` option. If this option
 is set, timestamps have to be integers, and refer to chapter numbers, starting
-with 0.
+with 0. The default value for this parameter is ``seconds``, which means the
+time is as described in the previous paragraph.
 
 Example::
 
@@ -164,6 +335,36 @@ Example::
 
 The virtual timeline will have two chapters, one called "cap.ts" from 0-240s
 and a second one called "Show Opening" from 240-330s.
+
+Entry which defines the track layout
+====================================
+
+Normally, you're supposed to put only files with compatible layouts into an EDL
+file. However, at least the mpv implementation accepts entries that use
+different codecs, or even have a different number of audio/video/subtitle
+tracks. In this case, it's not obvious, which virtual tracks the EDL show should
+expose when being played.
+
+Currently, mpv will apply an arbitrary heuristic which tracks the EDL file
+should expose. (Before mpv 0.30.0, it always used the first source file in the
+segment list.)
+
+You can set the ``layout`` option to ``this`` to make a specific entry define
+the track layout.
+
+Example::
+
+    # mpv EDL v0
+    file_with_2_streams.ts,5,240
+    file_with_5_streams.mkv,0,90,layout=this
+
+The way the different virtual EDL tracks are associated with the per-segment
+ones is highly implementation-defined, and uses a heuristic. If a segment is
+missing a track, there will be a "hole", and bad behavior may result. Improving
+this is subject to further development (due to being fringe cases, they don't
+have a high priority).
+
+If future versions of mpv change this again, this option may be ignored.
 
 Syntax of EDL URIs
 ==================

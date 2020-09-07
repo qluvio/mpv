@@ -24,44 +24,6 @@ See ``--vf`` group of options for info on how ``--af-defaults``, ``--af-add``,
 
 Available filters are:
 
-``lavrresample[=option1:option2:...]``
-    This filter uses libavresample (or libswresample, depending on the build)
-    to change sample rate, sample format, or channel layout of the audio stream.
-    This filter is automatically enabled if the audio output does not support
-    the audio configuration of the file being played.
-
-    .. warning::
-
-        Deprecated. Either use the ``--audio-resample-...`` options to customize
-        resampling, or the libavfilter ``--af=aresample`` filter, which has its
-        own options.
-
-    It supports only the following sample formats: u8, s16, s32, float.
-
-    ``filter-size=<length>``
-        Length of the filter with respect to the lower sampling rate. (default:
-        16)
-    ``phase-shift=<count>``
-        Log2 of the number of polyphase entries. (..., 10->1024, 11->2048,
-        12->4096, ...) (default: 10->1024)
-    ``cutoff=<cutoff>``
-        Cutoff frequency (0.0-1.0), default set depending upon filter length.
-    ``linear``
-        If set then filters will be linearly interpolated between polyphase
-        entries. (default: no)
-    ``no-detach``
-        Do not detach if input and output audio format/rate/channels match.
-        (If you just want to set defaults for this filter that will be used
-        even by automatically inserted lavrresample instances, you should
-        prefer setting them with the ``--audio-resample-...`` options.) This
-        does not do anything anymore and the filter will never detach.
-    ``normalize=<yes|no|auto>``
-        Whether to normalize when remixing channel layouts (default: auto).
-        ``auto`` uses the value set by ``--audio-normalize-downmix``.
-    ``o=<string>``
-        Set AVOptions on the SwrContext or AVAudioResampleContext. These should
-        be documented by FFmpeg or Libav.
-
 ``lavcac3enc[=options]``
     Encode multi-channel audio to AC-3 at runtime using libavcodec. Supports
     16-bit native-endian input format, maximum 6 channels. The output is
@@ -199,6 +161,28 @@ Available filters are:
             Would play media at 1.2x normal speed, with audio at normal pitch.
             Changing playback speed would change pitch, leaving audio tempo at
             1.2x.
+    
+``scaletempo2[=option1:option2:...]``
+    Scales audio tempo without altering pitch.
+    The algorithm is ported from chromium and uses the 
+    Waveform Similarity Overlap-and-add (WSOLA) method.
+    It seems to achieve a higher audio quality than scaletempo and rubberband.
+
+    By default, the ``search-interval`` and ``window-size`` parameters 
+    have the same values as in chromium.
+
+    ``min-speed=<speed>``
+        Mute audio if the playback speed is below ``<speed>``. (default: 0.25)
+
+    ``max-speed=<speed>``
+        Mute audio if the playback speed is above ``<speed>``
+        and ``<speed> != 0``. (default: 4.0)
+
+    ``search-interval=<amount>``
+        Length in milliseconds to search for best overlap position. (default: 30)
+    
+    ``window-size=<amount>``
+        Length in milliseconds of the overlap-and-add window. (default: 20)
 
 ``rubberband``
     High quality pitch correction with librubberband. This can be used in place
@@ -258,3 +242,10 @@ Available filters are:
         broken filters. In practice, these broken filters will either cause slow
         A/V desync over time (with some files), or break playback completely if
         you seek or start playback from the middle of a file.
+
+``drop``
+    This filter drops or repeats audio frames to adapt to playback speed. It
+    always operates on full audio frames, because it was made to handle SPDIF
+    (compressed audio passthrough). This is used automatically if the
+    ``--video-sync=display-adrop`` option is used. Do not use this filter (or
+    the given option); they are extremely low quality.

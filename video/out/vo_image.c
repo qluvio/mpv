@@ -56,8 +56,8 @@ struct vo_image_opts {
 
 static const struct m_sub_options vo_image_conf = {
     .opts = (const struct m_option[]) {
-        OPT_SUBSTRUCT("vo-image", opts, image_writer_conf, 0),
-        OPT_STRING("vo-image-outdir", outdir, M_OPT_FILE),
+        {"vo-image", OPT_SUBSTRUCT(opts, image_writer_conf)},
+        {"vo-image-outdir", OPT_STRING(outdir), .flags = M_OPT_FILE},
         {0},
     },
     .size = sizeof(struct vo_image_opts),
@@ -120,7 +120,7 @@ static void flip_page(struct vo *vo)
         filename = mp_path_join(t, p->opts->outdir, filename);
 
     MP_INFO(vo, "Saving %s\n", filename);
-    write_image(p->current, p->opts->opts, filename, vo->log);
+    write_image(p->current, p->opts->opts, filename, vo->global, vo->log);
 
     talloc_free(t);
     mp_image_unrefp(&p->current);

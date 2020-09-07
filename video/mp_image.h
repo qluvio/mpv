@@ -28,28 +28,15 @@
 #include "csputils.h"
 #include "video/img_format.h"
 
+// Assumed minimum align needed for image allocation. It's notable that FFmpeg's
+// libraries except libavcodec don't really know what alignment they want.
+// Things will randomly crash or get slower if the alignment is not satisfied.
+// Whatever. This value should be pretty safe with current CPU architectures.
+#define MP_IMAGE_BYTE_ALIGN 64
+
 #define MP_IMGFIELD_TOP_FIRST 0x02
 #define MP_IMGFIELD_REPEAT_FIRST 0x04
 #define MP_IMGFIELD_INTERLACED 0x20
-
-enum mp_spherical_type {
-    MP_SPHERICAL_AUTO = 0,
-    MP_SPHERICAL_NONE,              // normal video
-    MP_SPHERICAL_UNKNOWN,           // unknown projection
-    MP_SPHERICAL_EQUIRECTANGULAR,   // (untiled)
-};
-
-extern const struct m_opt_choice_alternatives mp_spherical_names[];
-
-struct mp_spherical_params {
-    enum mp_spherical_type type;
-    float ref_angles[3]; // yaw/pitch/roll, refer to AVSphericalMapping
-};
-
-enum mp_image_hw_flags {
-    MP_IMAGE_HW_FLAG_OPAQUE = 1,    // an opaque hw format is used - the exact
-                                    // format is subject to hwctx internals
-};
 
 // Describes image parameters that usually stay constant.
 // New fields can be added in the future. Code changing the parameters should
@@ -57,7 +44,6 @@ enum mp_image_hw_flags {
 struct mp_image_params {
     enum mp_imgfmt imgfmt;      // pixel format
     enum mp_imgfmt hw_subfmt;   // underlying format for some hwaccel pixfmts
-    unsigned hw_flags;          // bit mask of mp_image_hw_flags
     int w, h;                   // image dimensions
     int p_w, p_h;               // define pixel aspect ratio (undefined: 0/0)
     struct mp_colorspace color;
@@ -65,7 +51,7 @@ struct mp_image_params {
     // The image should be rotated clockwise (0-359 degrees).
     int rotate;
     enum mp_stereo3d_mode stereo3d; // image is encoded with this mode
-    struct mp_spherical_params spherical;
+    enum mp_alpha_type alpha;   // usually auto; only set if explicitly known
 };
 
 /* Memory management:
@@ -151,6 +137,8 @@ void mp_image_setrefp(struct mp_image **p_img, struct mp_image *new_value);
 void mp_image_unrefp(struct mp_image **p_img);
 
 void mp_image_clear(struct mp_image *mpi, int x0, int y0, int x1, int y1);
+void mp_image_clear_rc(struct mp_image *mpi, struct mp_rect rc);
+void mp_image_clear_rc_inv(struct mp_image *mpi, struct mp_rect rc);
 void mp_image_crop(struct mp_image *img, int x0, int y0, int x1, int y1);
 void mp_image_crop_rc(struct mp_image *img, struct mp_rect rc);
 void mp_image_vflip(struct mp_image *img);
@@ -162,6 +150,8 @@ int mp_image_plane_h(struct mp_image *mpi, int plane);
 void mp_image_setfmt(mp_image_t* mpi, int out_fmt);
 void mp_image_steal_data(struct mp_image *dst, struct mp_image *src);
 void mp_image_unref_data(struct mp_image *img);
+
+int mp_image_approx_byte_size(struct mp_image *img);
 
 struct mp_image *mp_image_new_dummy_ref(struct mp_image *img);
 struct mp_image *mp_image_new_custom_ref(struct mp_image *img, void *arg,
@@ -196,5 +186,9 @@ void memcpy_pic(void *dst, const void *src, int bytesPerLine, int height,
                 int dstStride, int srcStride);
 void memset_pic(void *dst, int fill, int bytesPerLine, int height, int stride);
 void memset16_pic(void *dst, int fill, int unitsPerLine, int height, int stride);
+
+void *mp_image_pixel_ptr(struct mp_image *img, int plane, int x, int y);
+void *mp_image_pixel_ptr_ny(struct mp_image *img, int plane, int x, int y);
+size_t mp_image_plane_bytes(struct mp_image *img, int plane, int x0, int w);
 
 #endif /* MPLAYER_MP_IMAGE_H */
