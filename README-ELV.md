@@ -37,8 +37,12 @@ export PKG_CONFIG_PATH=.../elv-toolchain/dist/linux-glibc.2.27/lib/pkgconfig
 
 Install waf if not installed - run `./bootstrap.py`
 
+Prerequisites:
+
+- libass-dev
+
 ```
-./waf configure --disable-libass --disable-gl --disable-x11
+./waf configure --disable-gl --disable-x11
 
 LD_RUN_PATH='$ORIGIN/../lib' RPATH='$ORIGIN/../lib' ./waf     # This builds ./build/mpv
 ```
