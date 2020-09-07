@@ -20,7 +20,7 @@
 
 #include "common/common.h"
 #include "common/msg.h"
-#include "common/stats.h"
+#include "common/elv_stats.h"
 
 #include "demux.h"
 #include "timeline.h"
