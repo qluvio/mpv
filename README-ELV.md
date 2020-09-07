@@ -19,22 +19,26 @@
 
 ## Configure and build
 
-Mac OSX
+### Mac OSX
 
 ```
 export PKG_CONFIG_PATH=/s/QCODE/elv-toolchain/dist/darwin-10.14/lib/pkgconfig:/usr/local/Cellar/lua\@5.1/5.1.5_8/libexec/lib/pkgconfig
 ```
 
-Ubuntu
+### Ubuntu
+
+> Notes:
+> - compile elv-toolchain FFMpeg with `--enable-openssl`
+> - replace `...` with path to elv-toolchain
 
 ```
-export PKG_CONFIG_PATH=/opt/eluvio/src/elv-toolchain/dist/linux-glibc.2.27/lib/pkgconfig
+export PKG_CONFIG_PATH=.../elv-toolchain/dist/linux-glibc.2.27/lib/pkgconfig
 ```
 
 Install waf if not installed - run `./bootstrap.py`
 
 ```
-./waf configure --disable-libass
+./waf configure --disable-libass --disable-gl --disable-x11
 
 LD_RUN_PATH='$ORIGIN/../lib' RPATH='$ORIGIN/../lib' ./waf     # This builds ./build/mpv
 ```
@@ -59,3 +63,4 @@ export LD_LIBRARY_PATH=/opt/eluvio/src/elv-toolchain/dist/linux-glibc.2.27/lib
 stream_read_unbuffered 8k size 1633
 
 ```
+
