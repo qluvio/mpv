@@ -31,8 +31,6 @@
 #include <limits.h>
 #include <assert.h>
 
-#include <libavutil/common.h>
-
 #include "config.h"
 #include "video/vdpau.h"
 #include "video/vdpau_mixer.h"
@@ -810,7 +808,7 @@ static void flip_page(struct vo *vo)
      * not make the target time in reality. Without this check we could drop
      * every frame, freezing the display completely if video lags behind.
      */
-    if (now > PREV_VSYNC(FFMAX(pts, vc->last_queue_time + vc->vsync_interval)))
+    if (now > PREV_VSYNC(MPMAX(pts, vc->last_queue_time + vc->vsync_interval)))
         npts = UINT64_MAX;
 
     /* Allow flipping a frame at a vsync if its presentation time is a
@@ -837,15 +835,15 @@ static void flip_page(struct vo *vo)
 
     vc->dropped_time = ideal_pts;
 
-    pts = FFMAX(pts, vc->last_queue_time + vc->vsync_interval);
-    pts = FFMAX(pts, now);
+    pts = MPMAX(pts, vc->last_queue_time + vc->vsync_interval);
+    pts = MPMAX(pts, now);
     if (npts < PREV_VSYNC(pts) + vc->vsync_interval)
         goto drop;
 
     int num_flips = update_presentation_queue_status(vo);
     vsync = vc->recent_vsync_time + num_flips * vc->vsync_interval;
-    pts = FFMAX(pts, now);
-    pts = FFMAX(pts, vsync + (vc->vsync_interval >> 2));
+    pts = MPMAX(pts, now);
+    pts = MPMAX(pts, vsync + (vc->vsync_interval >> 2));
     vsync = PREV_VSYNC(pts);
     if (npts < vsync + vc->vsync_interval)
         goto drop;
@@ -1046,6 +1044,11 @@ static int preinit(struct vo *vo)
     vc->vdp->bitmap_surface_query_capabilities(vc->vdp_device, VDP_RGBA_FORMAT_A8,
                             &vc->supports_a8, &(uint32_t){0}, &(uint32_t){0});
 
+    MP_WARN(vo, "Warning: this compatibility VO is low quality and may "
+                "have issues with OSD, scaling, screenshots and more.\n"
+                "vo=gpu is the preferred choice in any case and "
+                "includes VDPAU support via hwdec=vdpau or vdpau-copy.\n");
+
     return 0;
 }
 
@@ -1112,26 +1115,24 @@ const struct vo_driver video_out_vdpau = {
     .uninit = uninit,
     .priv_size = sizeof(struct vdpctx),
     .options = (const struct m_option []){
-        OPT_INTRANGE("deint", deint, 0, -4, 4),
-        OPT_FLAG("chroma-deint", chroma_deint, 0, OPTDEF_INT(1)),
-        OPT_FLAG("pullup", pullup, 0),
-        OPT_FLOATRANGE("denoise", denoise, 0, 0, 1),
-        OPT_FLOATRANGE("sharpen", sharpen, 0, -1, 1),
-        OPT_INTRANGE("hqscaling", hqscaling, 0, 0, 9),
-        OPT_FLOAT("fps", user_fps, 0),
-        OPT_FLAG("composite-detect", composite_detect, 0, OPTDEF_INT(1)),
-        OPT_INT("queuetime-windowed", flip_offset_window, 0, OPTDEF_INT(50)),
-        OPT_INT("queuetime-fs", flip_offset_fs, 0, OPTDEF_INT(50)),
-        OPT_INTRANGE("output-surfaces", num_output_surfaces, 0,
-                     2, MAX_OUTPUT_SURFACES, OPTDEF_INT(3)),
-        OPT_COLOR("colorkey", colorkey, 0,
-                  .defval = &(const struct m_color) {
-                      .r = 2, .g = 5, .b = 7, .a = 255,
-                  }),
-        OPT_FLAG("force-yuv", force_yuv, 0),
-        OPT_REPLACED("queuetime_windowed", "queuetime-windowed"),
-        OPT_REPLACED("queuetime_fs", "queuetime-fs"),
-        OPT_REPLACED("output_surfaces", "output-surfaces"),
+        {"deint", OPT_INT(deint), M_RANGE(-4, 4)},
+        {"chroma-deint", OPT_FLAG(chroma_deint), OPTDEF_INT(1)},
+        {"pullup", OPT_FLAG(pullup)},
+        {"denoise", OPT_FLOAT(denoise), M_RANGE(0, 1)},
+        {"sharpen", OPT_FLOAT(sharpen), M_RANGE(-1, 1)},
+        {"hqscaling", OPT_INT(hqscaling), M_RANGE(0, 9)},
+        {"fps", OPT_FLOAT(user_fps)},
+        {"composite-detect", OPT_FLAG(composite_detect), OPTDEF_INT(1)},
+        {"queuetime-windowed", OPT_INT(flip_offset_window), OPTDEF_INT(50)},
+        {"queuetime-fs", OPT_INT(flip_offset_fs), OPTDEF_INT(50)},
+        {"output-surfaces", OPT_INT(num_output_surfaces),
+            M_RANGE(2, MAX_OUTPUT_SURFACES), OPTDEF_INT(3)},
+        {"colorkey", OPT_COLOR(colorkey),
+            .defval = &(const struct m_color){.r = 2, .g = 5, .b = 7, .a = 255}},
+        {"force-yuv", OPT_FLAG(force_yuv)},
+        {"queuetime_windowed", OPT_REPLACED("queuetime-windowed")},
+        {"queuetime_fs", OPT_REPLACED("queuetime-fs")},
+        {"output_surfaces", OPT_REPLACED("output-surfaces")},
         {NULL},
     },
     .options_prefix = "vo-vdpau",

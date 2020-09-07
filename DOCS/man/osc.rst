@@ -167,18 +167,46 @@ Configurable Options
 ``seekbarstyle``
     Default: bar
 
-    Sets the style of the seekbar, slider (diamond marker), knob (circle
-    marker with guide), or bar (fill).
-    Default pre-0.21.0 was 'slider'.
+    Sets the style of the playback position marker and overall shape
+    of the seekbar: ``bar``, ``diamond`` or ``knob``.
+
+``seekbarhandlesize``
+    Default: 0.6
+
+    Size ratio of the seek handle if ``seekbarstyle`` is set to ``dimaond``
+    or ``knob``. This is relative to the full height of the seekbar.
 
 ``seekbarkeyframes``
     Default: yes
 
-    Controls the mode used to seek when dragging the seekbar. By default,
-    keyframes are used. If set to false, exact seeking on mouse drags
-    will be used instead. Keyframes are preferred, but exact seeks may be
-    useful in cases where keyframes cannot be found. Note that using exact
-    seeks can potentially make mouse dragging much slower.
+    Controls the mode used to seek when dragging the seekbar (default: true). If
+    set to true, default seeking mode is used (usually keyframes, but player
+    defaults and heuristics can change it to exact). If set to false, exact
+    seeking on mouse drags will be used instead. Keyframes are preferred, but
+    exact seeks may be useful in cases where keyframes cannot be found. Note
+    that using exact seeks can potentially make mouse dragging much slower.
+
+``seekrangestyle``
+    Default: inverted
+
+    Display seekable ranges on the seekbar. ``bar`` shows them on the full
+    height of the bar, ``line`` as a thick line and ``inverted`` as a thin
+    line that is inverted over playback position markers. ``none`` will hide
+    them. Additionally, ``slider`` will show a permanent handle inside the seekbar
+    with cached ranges marked inside. Note that these will look differently
+    based on the seekbarstyle option. Also, ``slider`` does not work with
+    ``seekbarstyle`` set to ``bar``.
+
+``seekrangeseparate``
+    Default: yes
+
+    Controls whether to show line-style seekable ranges on top of the
+    seekbar or separately if ``seekbarstyle`` is set to ``bar``.
+
+``seekrangealpha``
+    Default: 200
+
+    Alpha of the seekable ranges, 0 (opaque) to 255 (fully transparent).
 
 ``deadzonesize``
     Default: 0.5
@@ -281,11 +309,6 @@ Configurable Options
 
     Display timecodes with milliseconds
 
-``seekranges``
-    Default: yes
-
-    Display seekable ranges on the seekbar
-
 ``visibility``
     Default: auto (auto hide/show on mouse move)
 
@@ -298,6 +321,59 @@ Configurable Options
     text width on screen and so it needs to limit it by number of chars. The
     default is conservative to allow wide fonts to be used without overflow.
     However, with many common fonts a bigger number can be used. YMMV.
+
+``boxvideo``
+    Default: no
+
+    Whether to overlay the osc over the video (``no``), or to box the video
+    within the areas not covered by the osc (``yes``). If this option is set,
+    the osc may overwrite the ``--video-margin-ratio-*`` options, even if the
+    user has set them. (It will not overwrite them if all of them are set to
+    default values.) Additionally, ``visibility`` must be set to ``always``.
+    Otherwise, this option does nothing.
+
+    Currently, this is supported for the ``bottombar`` and ``topbar`` layout
+    only. The other layouts do not change if this option is set. Separately,
+    if window controls are present (see below), they will be affected
+    regardless of which osc layout is in use.
+
+    The border is static and appears even if the OSC is configured to appear
+    only on mouse interaction. If the OSC is invisible, the border is simply
+    filled with the background color (black by default).
+
+    This currently still makes the OSC overlap with subtitles (if the
+    ``--sub-use-margins`` option is set to ``yes``, the default). This may be
+    fixed later.
+
+    This does not work correctly with video outputs like ``--vo=xv``, which
+    render OSD into the unscaled video.
+
+``windowcontrols``
+    Default: auto (Show window controls if there is no window border)
+
+    Whether to show window management controls over the video, and if so,
+    which side of the window to place them. This may be desirable when the
+    window has no decorations, either because they have been explicitly
+    disabled (``border=no``) or because the current platform doesn't support
+    them (eg: gnome-shell with wayland).
+
+    The set of window controls is fixed, offering ``minimize``, ``maximize``,
+    and ``quit``. Not all platforms implement ``minimize`` and ``maximize``,
+    but ``quit`` will always work.
+
+``windowcontrols_alignment``
+    Default: right
+
+    If window controls are shown, indicates which side should they be aligned
+    to.
+
+    Supports ``left`` and ``right`` which will place the controls on those
+    respective sides.
+
+``greenandgrumpy``
+    Default: no
+
+    Set to ``yes`` to reduce festivity (i.e. disable santa hat in December.)
 
 Script Commands
 ~~~~~~~~~~~~~~~

@@ -10,6 +10,8 @@ Track Selection
     language codes, Matroska, MPEG-TS and NUT use ISO 639-2 three-letter
     language codes, while OGM uses a free-form identifier. See also ``--aid``.
 
+    This is a string list option. See `List Options`_ for details.
+
     .. admonition:: Examples
 
         - ``mpv dvd://1 --alang=hu,en`` chooses the Hungarian language track
@@ -23,6 +25,8 @@ Track Selection
     language codes, Matroska uses ISO 639-2 three letter language codes while
     OGM uses a free-form identifier. See also ``--sid``.
 
+    This is a string list option. See `List Options`_ for details.
+
     .. admonition:: Examples
 
         - ``mpv dvd://1 --slang=hu,en`` chooses the Hungarian subtitle track on
@@ -33,6 +37,8 @@ Track Selection
 ``--vlang=<...>``
     Equivalent to ``--alang`` and ``--slang``, for video tracks.
 
+    This is a string list option. See `List Options`_ for details.
+
 ``--aid=<ID|auto|no>``
     Select audio track. ``auto`` selects the default, ``no`` disables audio.
     See also ``--alang``. mpv normally prints available audio tracks on the
@@ -42,6 +48,53 @@ Track Selection
 
     ``--aid=no`` or ``--audio=no`` or ``--no-audio`` disables audio playback.
     (The latter variant does not work with the client API.)
+
+    .. note::
+
+        The track selection options (``--aid`` but also ``--sid`` and the
+        others) sometimes expose behavior that may appear strange. Also, the
+        behavior tends to change around with each mpv release.
+
+        The track selection properties will return the option value outside of
+        playback (as expected), but during playbac, the affective track
+        selection is returned. For example, with ``--aid=auto``, the ``aid``
+        property will suddenly return ``2`` after playback initialization
+        (assuming the file has at least 2 audio tracks, and the second is the
+        default).
+
+        At mpv 0.32.0 (and some releases before), if you passed a track value
+        for which a corresponding track didn't exist (e.g. ``--aid=2`` and there
+        was only 1 audio track), the ``aid`` property returned ``no``. However if
+        another audio track was added during playback, and you tried to set the
+        ``aid`` property to ``2``, nothing happened, because the ``aid`` option
+        still had the value ``2``, and writing the same value has no effect.
+
+        With mpv 0.33.0, the behavior was changed. Now track selection options
+        are reset to ``auto`` at playback initialization, if the option had
+        tries to select a track that does not exist. The same is done if the
+        track exists, but fails to initialize. The consequence is that unlike
+        before mpv 0.33.0, the user's track selection parameters are clobbered
+        in certain situations.
+
+        Also since mpv 0.33.0, trying to select a track by number will strictly
+        select this track. Before this change, trying to select a track which
+        did not exist would fall back to track default selection at playback
+        initialization. The new behavior is more consistent.
+
+        Setting a track selection property at runtime, and then playing a new
+        file might reset the track selection to defaults, if the fingerprint
+        of the track list of the new file is different.
+
+        Be aware of tricky combinations of all of all of the above: for example,
+        ``mpv --aid=2 file_with_2_audio_tracks.mkv file_with_1_audio_track.mkv``
+        would first play the correct track, and the second file without audio.
+        If you then go back the first file, its first audio track will be played,
+        and the second file is played with audio. If you do the same thing again
+        but instead of using ``--aid=2`` you run ``set aid 2`` while the file is
+        playing, then changing to the second file will play its audio track.
+        This is because runtime selection enables the fingerprint heuristic.
+
+        Most likely this is not the end.
 
 ``--sid=<ID|auto|no>``
     Display the subtitle stream specified by ``<ID>``. ``auto`` selects
@@ -82,6 +135,11 @@ Track Selection
     Note that if ``--lavfi-complex`` is set before playback is started, the
     referenced tracks are always selected.
 
+``--subs-with-matching-audio=<yes|no>``
+    When autoselecting a subtitle track, select a non-forced one even if the selected
+    audio stream matches your preferred subtitle language (default: yes). Disable this
+    if you'd like to only show subtitles for foreign audio or onscreen text.
+
 
 Playback Control
 ----------------
@@ -89,10 +147,12 @@ Playback Control
 ``--start=<relative time>``
     Seek to given time position.
 
-    The general format for absolute times is ``[[hh:]mm:]ss[.ms]``. If the time
-    is given with a prefix of ``+`` or ``-``, the seek is relative from the start
-    or end of the file. (Since mpv 0.14, the start of the file is always
-    considered 0.)
+    The general format for times is ``[+|-][[hh:]mm:]ss[.ms]``. If the time is
+    prefixed with ``-``, the time is considered relative from the end of the
+    file (as signaled by the demuxer/the file). A ``+`` is usually ignored (but
+    see below).
+
+    The following alternative time specifications are recognized:
 
     ``pp%`` seeks to percent position pp (0-100).
 
@@ -100,9 +160,17 @@ Playback Control
 
     ``none`` resets any previously set option (useful for libmpv).
 
+    If ``--rebase-start-time=no`` is given, then prefixing times with ``+``
+    makes the time relative to the start of the file. A timestamp without
+    prefix is considered an absolute time, i.e. should seek to a frame with a
+    timestamp as the file contains it. As a bug, but also a hidden feature,
+    putting 1 or more spaces before the ``+`` or ``-`` always interprets the
+    time as absolute, which can be used to seek to negative timestamps (useful
+    for debugging at most).
+
     .. admonition:: Examples
 
-        ``--start=+56``, ``--start=+00:56``
+        ``--start=+56``, ``--start=00:56``
             Seeks to the start time + 56 seconds.
         ``--start=-56``, ``--start=-00:56``
             Seeks to the end time - 56 seconds.
@@ -129,6 +197,10 @@ Playback Control
     If both ``--end`` and ``--length`` are provided, playback will stop when it
     reaches either of the two endpoints.
 
+    Obscurity note: this does not work correctly if ``--rebase-start-time=no``,
+    and the specified time is not an "absolute" time, as defined in the
+    ``--start`` option description.
+
 ``--rebase-start-time=<yes|no>``
     Whether to move the file start time to ``00:00:00`` (default: yes). This
     is less awkward for files which start at a random timestamp, such as
@@ -149,12 +221,6 @@ Playback Control
 
 ``--shuffle``
     Play files in random order.
-
-``--chapter=<start[-end]>``
-    Specify which chapter to start playing at. Optionally specify which
-    chapter to end playing at.
-
-    See also: ``--start``.
 
 ``--playlist-start=<auto|index>``
     Set which file on the internal playlist to start playback with. The index
@@ -208,7 +274,7 @@ Playback Control
     chapter instead. A negative value means always go back to the previous
     chapter.
 
-``--hr-seek=<no|absolute|yes>``
+``--hr-seek=<no|absolute|yes|default>``
     Select when to use precise seeks that are not limited to keyframes. Such
     seeks require decoding video from the previous keyframe up to the target
     position and so can take some time depending on decoding performance. For
@@ -220,6 +286,9 @@ Playback Control
     :absolute: Use precise seeks if the seek is to an absolute position in the
                file, such as a chapter seek, but not for relative seeks like
                the default behavior of arrow keys (default).
+    :default:  Like ``absolute``, but enable hr-seeks in audio-only cases. The
+               exact behavior is implementation specific and may change with
+               new releases.
     :yes:      Use precise seeks whenever possible.
     :always:   Same as ``yes`` (for compatibility).
 
@@ -262,6 +331,11 @@ Playback Control
     Load URLs from playlists which are considered unsafe (default: no). This
     includes special protocols and anything that doesn't refer to normal files.
     Local files and HTTP links on the other hand are always considered safe.
+
+    In addition, if a playlist is loaded while this is set, the added playlist
+    entries are not marked as originating from network or potentially unsafe
+    location. (Instead, the behavior is as if the playlist entries were provided
+    directly to mpv command line or ``loadfile`` command.)
 
     Note that ``--playlist`` always loads all entries, so you use that instead
     if you really have the need for this functionality.
@@ -315,12 +389,25 @@ Playback Control
     the ``a`` timestamp. Seeking past the ``b`` point doesn't loop (this is
     intentional).
 
-    If both options are set to ``no`` or unset, looping is disabled.
-    Otherwise, the start/end of playback is used if one of the options
-    is set to ``no`` or unset.
+    If ``a`` is after ``b``, the behavior is as if the points were given in
+    the right order, and the player will seek to ``b`` after crossing through
+    ``a``. This is different from old behavior, where looping was disabled (and
+    as a bug, looped back to ``a`` on the end of the file).
+
+    If either options are set to ``no`` (or unset), looping is disabled. This
+    is different from old behavior, where an unset ``a`` implied the start of
+    the file, and an unset ``b`` the end of the file.
 
     The loop-points can be adjusted at runtime with the corresponding
     properties. See also ``ab-loop`` command.
+
+``--ab-loop-count=<N|inf>``
+    Run A-B loops only N times, then ignore the A-B loop points (default: inf).
+    Every finished loop iteration will decrement this option by 1 (unless it is
+    set to ``inf`` or 0). ``inf`` means that looping goes on forever. If this
+    option is set to 0, A-B looping is ignored, and even the ``ab-loop`` command
+    will not enable looping again (the command will show ``(disabled)`` on the
+    OSD message if both loop points are set, but ``ab-loop-count`` is 0).
 
 ``--ordered-chapters``, ``--no-ordered-chapters``
     Enabled by default.
@@ -360,6 +447,230 @@ Playback Control
     With ``no``, playback will continue in video-only or audio-only mode if one
     of them fails. This doesn't affect playback of audio-only or video-only
     files.
+
+``--play-dir=<forward|+|backward|->``
+    Control the playback direction (default: forward). Setting ``backward``
+    will attempt to play the file in reverse direction, with decreasing
+    playback time. If this is set on playback starts, playback will start from
+    the end of the file. If this is changed at during playback, a hr-seek will
+    be issued to change the direction.
+
+    ``+`` and ``-`` are aliases for ``forward`` and ``backward``.
+
+    The rest of this option description pertains to the ``backward`` mode.
+
+    .. note::
+
+        Backward playback is extremely fragile. It may not always work, is much
+        slower than forward playback, and breaks certain other features. How
+        well it works depends mainly on the file being played. Generally, it
+        will show good results (or results at all) only if the stars align.
+
+    mpv, as well as most media formats, were designed for forward playback
+    only. Backward playback is bolted on top of mpv, and tries to make a medium
+    effort to make backward playback work. Depending on your use-case, another
+    tool may work much better.
+
+    Backward playback is not exactly a 1st class feature. Implementation
+    tradeoffs were made, that are bad for backward playback, but in turn do not
+    cause disadvantages for normal playback. Various possible optimizations are
+    not implemented in order to keep the complexity down. Normally, a media
+    player is highly pipelined (future data is prepared in separate threads, so
+    it is available in realtime when the next stage needs it), but backward
+    playback will essentially stall the pipeline at various random points.
+
+    For example, for intra-only codecs are trivially backward playable, and
+    tools built around them may make efficient use of them (consider video
+    editors or camera viewers). mpv won't be efficient in this case, because it
+    uses its generic backward playback algorithm, that on top of it is not very
+    optimized.
+
+    If you just want to quickly go backward through the video and just show
+    "keyframes", just use forward playback, and hold down the left cursor key
+    (which on CLI with default config sends many small relative seek commands).
+
+    The implementation consists of mostly 3 parts:
+
+    - Backward demuxing. This relies on the demuxer cache, so the demuxer cache
+      should (or must, didn't test it) be enabled, and its size will affect
+      performance. If the cache is too small or too large, quadratic runtime
+      behavior may result.
+
+    - Backward decoding. The decoder library used (libavcodec) does not support
+      this. It is emulated by feeding bits of data in forward, putting the
+      result in a queue, returning the queue data to the VO in reverse, and
+      then starting over at an earlier position. This can require buffering an
+      extreme amount of decoded data, and also completely breaks pipelining.
+
+    - Backward output. This is relatively simple, because the decoder returns
+      the frames in the needed order. However, this may cause various problems
+      because filters see audio and video going backward.
+
+    Known problems:
+
+    - It's fragile. If anything doesn't work, random non-useful behavior may
+      occur. In simple cases, the player will just play nonsense and artifacts.
+      In other cases, it may get stuck or heat the CPU. (Exceeding memory usage
+      significantly beyond the user-set limits would be a bug, though.)
+
+    - Performance and resource usage isn't good. In part this is inherent to
+      backward playback of normal media formats, and in parts due to
+      implementation choices and tradeoffs.
+
+    - This is extremely reliant on good demuxer behavior. Although backward
+      demuxing requires no special demuxer support, it is required that the
+      demuxer performs seeks reliably, fulfills some specific requirements
+      about packet metadata, and has deterministic behavior.
+
+    - Starting playback exactly from the end may or may not work, depending on
+      seeking behavior and file duration detection.
+
+    - Some container formats, audio, and video codecs are not supported due to
+      their behavior. There is no list, and the player usually does not detect
+      them. Certain live streams (including TV captures) may exhibit problems
+      in particular, as well as some lossy audio codecs. h264 intra-refresh is
+      known not to work due to problems with libavcodec. WAV and some other raw
+      audio formats tend to have problems - there are hacks for dealing with
+      them, which may or may not work.
+
+    - Backward demuxing of subtitles is not supported. Subtitle display still
+      works for some external text subtitle formats. (These are fully read into
+      memory, and only backward display is needed.) Text subtitles that are
+      cached in the subtitle renderer also have a chance to be displayed
+      correctly.
+
+    - Some features dealing with playback of broken or hard to deal with files
+      will not work fully (such as timestamp correction).
+
+    - If demuxer low level seeks (i.e. seeking the actual demuxer instead of
+      just within the demuxer cache) are performed by backward playback, the
+      created seek ranges may not join, because not enough overlap is achieved.
+
+    - Trying to use this with hardware video decoding will probably exhaust all
+      your GPU memory and then crash a thing or two. Or it will fail because
+      ``--hwdec-extra-frames`` will certainly be set too low.
+
+    - Stream recording is broken. ``--stream-record`` may keep working if you
+      backward play within a cached region only.
+
+    - Relative seeks may behave weird. Small seeks backward (towards smaller
+      time, i.e. ``seek -1``) may not really seek properly, and audio will
+      remain muted for a while. Using hr-seek is recommended, which should have
+      none of these problems.
+
+    - Some things are just weird. For example, while seek commands manipulate
+      playback time in the expected way (provided they work correctly), the
+      framestep commands are transposed. Backstepping will perform very
+      expensive work to step forward by 1 frame.
+
+    Tuning:
+
+    - Remove all ``--vf``/``--af`` filters you have set. Disable hardware
+      decoding. Disable idiotic nonsense like SPDIF passthrough.
+
+    - Increasing ``--video-reversal-buffer`` might help if reversal queue
+      overflow is reported, which may happen in high bitrate video, or video
+      with large GOP. Hardware decoding mostly ignores this, and you need to
+      increase ``--hwdec-extra-frames`` instead (until you get playback without
+      logged errors).
+
+    - The demuxer cache is essential for backward demuxing. Make sure to set
+      ``--cache=yes``. The cache size might matter. If it's too small, a queue
+      overflow will be logged, and backward playback cannot continue, or it
+      performs too many low level seeks. If it's too large, implementation
+      tradeoffs may cause general performance issues. Use
+      ``--demuxer-max-bytes`` to potentially increase the amount of packets the
+      demuxer layer can queue for reverse demuxing (basically it's the
+      ``--video-reversal-buffer`` equivalent for the demuxer layer).
+
+    - Setting ``--vd-queue-enable=yes`` can help a lot to make playback smooth
+      (once it works).
+
+    - ``--demuxer-backward-playback-step`` also factors into how many seeks may
+      be performed, and whether backward demuxing could break due to queue
+      overflow. If it's set too high, the backstep operation needs to search
+      through more packets all the time, even if the cache is large enough.
+
+    - Setting ``--demuxer-cache-wait`` may be useful to cache the entire file
+      into the demuxer cache. Set ``--demuxer-max-bytes`` to a large size to
+      make sure it can read the entire cache; ``--demuxer-max-back-bytes``
+      should also be set to a large size to prevent that tries to trim the
+      cache.
+
+    - If audio artifacts are audible, even though the AO does not underrun,
+      increasing ``--audio-backward-overlap`` might help in some cases.
+
+``--video-reversal-buffer=<bytesize>``, ``--audio-reversal-buffer=<bytesize>``
+    For backward decoding. Backward decoding decodes forward in steps, and then
+    reverses the decoder output. These options control the approximate maximum
+    amount of bytes that can be buffered. The main use of this is to avoid
+    unbounded resource usage; during normal backward playback, it's not supposed
+    to hit the limit, and if it does, it will drop frames and complain about it.
+
+    Use this option if you get reversal queue overflow errors during backward
+    playback. Increase the size until the warning disappears. Usually, the video
+    buffer will overflow first, especially if it's high resolution video.
+
+    This does not work correctly if video hardware decoding is used. The video
+    frame size will not include the referenced GPU and driver memory. Some
+    hardware decoders may also be limited by ``--hwdec-extra-frames``.
+
+    How large the queue size needs to be depends entirely on the way the media
+    was encoded. Audio typically requires a very small buffer, while video can
+    require excessively large buffers.
+
+    (Technically, this allows the last frame to exceed the limit. Also, this
+    does not account for other buffered frames, such as inside the decoder or
+    the video output.)
+
+    This does not affect demuxer cache behavior at all.
+
+    See ``--list-options`` for defaults and value range. ``<bytesize>`` options
+    accept suffixes such as ``KiB`` and ``MiB``.
+
+``--video-backward-overlap=<auto|number>``, ``--audio-backward-overlap=<auto|number>``
+    Number of overlapping keyframe ranges to use for backward decoding (default:
+    auto) ("keyframe" to be understood as in the mpv/ffmpeg specific meaning).
+    Backward decoding works by forward decoding in small steps. Some codecs
+    cannot restart decoding from any packet (even if it's marked as seek point),
+    which becomes noticeable with backward decoding (in theory this is a problem
+    with seeking too, but ``--hr-seek-demuxer-offset`` can fix it for seeking).
+    In particular, MDCT based audio codecs are affected.
+
+    The solution is to feed a previous packet to the decoder each time, and then
+    discard the output. This option controls how many packets to feed. The
+    ``auto`` choice is currently hardcoded to 0 for video, and uses 1 for lossy
+    audio, 0 for lossless audio. For some specific lossy audio codecs, this is
+    set to 2.
+
+    ``--video-backward-overlap`` can potentially handle intra-refresh video,
+    depending on the exact conditions. You may have to use the
+    ``--vd-lavc-show-all`` option as well.
+
+``--video-backward-batch=<number>``, ``--audio-backward-batch=<number>``
+    Number of keyframe ranges to decode at once when backward decoding (default:
+    1 for video, 10 for audio). Another pointless tuning parameter nobody should
+    use. This should affect performance only. In theory, setting a number higher
+    than 1 for audio will reduce overhead due to less frequent backstep
+    operations and less redundant decoding work due to fewer decoded overlap
+    frames (see ``--audio-backward-overlap``). On the other hand, it requires
+    a larger reversal buffer, and could make playback less smooth due to
+    breaking pipelining (e.g. by decoding a lot, and then doing nothing for a
+    while).
+
+    It probably never makes sense to set ``--video-backward-batch``. But in
+    theory, it could help with intra-only video codecs by reducing backstep
+    operations.
+
+``--demuxer-backward-playback-step=<seconds>``
+    Number of seconds the demuxer should seek back to get new packets during
+    backward playback (default: 60). This is useful for tuning backward
+    playback, see ``--play-dir`` for details.
+
+    Setting this to a very low value or 0 may make the player think seeking is
+    broken, or may make it perform multiple seeks.
+
+    Setting this to a high value may lead to quadratic runtime behavior.
 
 Program Behavior
 ----------------
@@ -405,6 +716,9 @@ Program Behavior
     files will be truncated. The log level is at least ``-v -v``, but
     can be raised via ``--msg-level`` (the option cannot lower it below the
     forced minimum log level).
+
+    A special case is the macOS bundle, it will create a log file at
+    ``~/Library/Logs/mpv.log`` by default.
 
 ``--config-dir=<path>``
     Force a different configuration directory. If this is set, the given
@@ -456,14 +770,18 @@ Program Behavior
     configuration subdirectory (usually ``~/.config/mpv/scripts/``).
     (Default: ``yes``)
 
-``--script=<filename>``
-    Load a Lua script. You can load multiple scripts by separating them with
-    commas (``,``).
+``--script=<filename>``, ``--scripts=file1.lua:file2.lua:...``
+    Load a Lua script. The second option allows you to load multiple scripts by
+    separating them with the path separator (``:`` on Unix, ``;`` on Windows).
+
+    ``--scripts`` is a path list option. See `List Options`_ for details.
 
 ``--script-opts=key1=value1,key2=value2,...``
     Set options for scripts. A script can query an option by key. If an
     option is used and what semantics the option value has depends entirely on
     the loaded scripts. Values not claimed by any scripts are ignored.
+
+    This is a key/value list option. See `List Options`_ for details.
 
 ``--merge-files``
     Pretend that all files passed to mpv are concatenated into a single, big
@@ -473,6 +791,13 @@ Program Behavior
     Do not restore playback position from the ``watch_later`` configuration
     subdirectory (usually ``~/.config/mpv/watch_later/``).
     See ``quit-watch-later`` input command.
+
+``--resume-playback-check-mtime``
+    Only restore the playback position from the ``watch_later`` configuration
+    subdirectory (usually ``~/.config/mpv/watch_later/``) if the file's
+    modification time is the same as at the time of saving. This may prevent
+    skipping forward in files with the same name which have different content.
+    (Default: ``no``)
 
 ``--profile=<profile1,profile2,...>``
     Use the given profile(s), ``--profile=help`` displays a list of the
@@ -496,6 +821,8 @@ Program Behavior
     command line.
 
     The special name ``all`` resets as many options as possible.
+
+    This is a string list option. See `List Options`_ for details.
 
     .. admonition:: Examples
 
@@ -521,7 +848,8 @@ Program Behavior
     (Default: disabled)
 
 ``--show-profile=<profile>``
-    Show the description and content of a profile.
+    Show the description and content of a profile. Lists all profiles if no
+    parameter is provided.
 
 ``--use-filedir-conf``
     Look for a file-specific configuration file in the same directory as the
@@ -539,40 +867,109 @@ Program Behavior
 
     If the script can't do anything with an URL, it will do nothing.
 
-    The ``try_ytdl_first`` script option accepts a boolean 'yes' or 'no', and if
-    'yes' will try parsing the URL with youtube-dl first, instead of the default
-    where it's only after mpv failed to open it. This mostly depends on whether
-    most of your URLs need youtube-dl parsing.
+    This accepts a set of options, which can be passed to it with the
+    ``--script-opts`` option (using ``ytdl_hook-`` as prefix):
 
-    The ``exclude`` script option accepts a ``|``-separated list of URL patterns
-    which mpv should not use with youtube-dl. The patterns are matched after
-    the ``http(s)://`` part of the URL.
+    ``try_ytdl_first=<yes|no>``
+        If 'yes' will try parsing the URL with youtube-dl first, instead of the
+        default where it's only after mpv failed to open it. This mostly depends
+        on whether most of your URLs need youtube-dl parsing.
 
-    ``^`` matches the beginning of the URL, ``$`` matches its end, and you
-    should use ``%`` before any of the characters ``^$()%|,.[]*+-?`` to match
-    that character.
+    ``exclude=<URL1|URL2|...``
+        A ``|``-separated list of URL patterns which mpv should not use with
+        youtube-dl. The patterns are matched after the ``http(s)://`` part of
+        the URL.
 
-    .. admonition:: Examples
+        ``^`` matches the beginning of the URL, ``$`` matches its end, and you
+        should use ``%`` before any of the characters ``^$()%|,.[]*+-?`` to
+        match that character.
 
-        - ``--script-opts=ytdl_hook-exclude='^youtube%.com'``
-          will exclude any URL that starts with ``http://youtube.com`` or
-          ``https://youtube.com``.
-        - ``--script-opts=ytdl_hook-exclude='%.mkv$|%.mp4$'``
-          will exclude any URL that ends with ``.mkv`` or ``.mp4``.
+        .. admonition:: Examples
 
-    See more lua patterns here: https://www.lua.org/manual/5.1/manual.html#5.4.1
+            - ``--script-opts=ytdl_hook-exclude='^youtube%.com'``
+              will exclude any URL that starts with ``http://youtube.com`` or
+              ``https://youtube.com``.
+            - ``--script-opts=ytdl_hook-exclude='%.mkv$|%.mp4$'``
+              will exclude any URL that ends with ``.mkv`` or ``.mp4``.
 
-    The ``use_manifests`` script option makes mpv use the master manifest URL for
-    formats like HLS and DASH, if available, allowing for video/audio selection
-    in runtime. It's disabled ("no") by default for performance reasons.
+        See more lua patterns here: https://www.lua.org/manual/5.1/manual.html#5.4.1
 
-``--ytdl-format=<best|worst|mp4|webm|...>``
+    ``all_formats=<yes|no>``
+        If 'yes' will attempt to add all formats found reported by youtube-dl
+        (default: no). Each format is added as a separate track. In addition,
+        they are delay-loaded, and actually opened only when a track is selected
+        (this should keep load times as low as without this option).
+
+        It adds average bitrate metadata, if available, which means you can use
+        ``--hls-bitrate`` to decide which track to select. (HLS used to be the
+        only format whose alternative quality streams were exposed in a similar
+        way, thus the option name.)
+
+        Tracks which represent formats that were selected by youtube-dl as
+        default will have the default flag set. This means mpv should generally
+        still select formats chosen with ``--ytdl-format`` by default.
+
+        Although this mechanism makes it possible to switch streams at runtime,
+        it's not suitable for this purpose for various technical reasons. (It's
+        slow, which can't be really fixed.) In general, this option is not
+        useful, and was only added to show that it's possible.
+
+        There are two cases that must be considered when doing quality/bandwidth
+        selection:
+
+            1. Completely separate audio and video streams (DASH-like). Each of
+               these streams contain either only audio or video, so you can
+               mix and combine audio/video bandwidths without restriction. This
+               intuitively matches best with the concept of selecting quality
+               by track (what ``all_formats`` is supposed to do).
+
+            2. Separate sets of muxed audio and video streams. Each version of
+               the media contains both an audio and video stream, and they are
+               interleaved. In order not to waste bandwidth, you should only
+               select one of these versions (if, for example, you select an
+               audio stream, then video will be downloaded, even if you selected
+               video from a different stream).
+
+               mpv will still represent them as separate tracks, but will set
+               the title of each track to ``muxed-N``, where ``N`` is replaced
+               with the youtube-dl format ID of the originating stream.
+
+        Some sites will mix 1. and 2., but we assume that they do so for
+        compatibility reasons, and there is no reason to use them at all.
+
+    ``force_all_formats=<yes|no>``
+        If set to 'yes', and ``all_formats`` is also set to 'yes', this will
+        try to represent all youtube-dl reported formats as tracks, even if
+        mpv would normally use the direct URL reported by it (default: yes).
+
+        It appears this normally makes a difference if youtube-dl works on a
+        master HLS playlist.
+
+        If this is set to 'no', this specific kind of stream is treated like
+        ``all_formats`` is set to 'no', and the stream selection as done by
+        youtube-dl (via ``--ytdl-format``) is used.
+
+    ``use_manifests=<yes|no>``
+        Make mpv use the master manifest URL for formats like HLS and DASH,
+        if available, allowing for video/audio selection in runtime (default:
+        no). It's disabled ("no") by default for performance reasons.
+
+    .. admonition:: Why do the option names mix ``_`` and ``-``?
+
+        I have no idea.
+
+``--ytdl-format=<ytdl|best|worst|mp4|webm|...>``
     Video format/quality that is directly passed to youtube-dl. The possible
     values are specific to the website and the video, for a given url the
     available formats can be found with the command
     ``youtube-dl --list-formats URL``. See youtube-dl's documentation for
     available aliases.
-    (Default: youtube-dl's default, currently ``bestvideo+bestaudio/best``)
+    (Default: ``bestvideo+bestaudio/best``)
+
+    The ``ytdl`` value does not pass a ``--format`` option to youtube-dl at all,
+    and thus does not override its default. Note that sometimes youtube-dl
+    returns a format that mpv cannot use, and in these cases the mpv default
+    may work better.
 
 ``--ytdl-raw-options=<key>=<value>[,<key>=<value>[,...]]``
     Pass arbitrary options to youtube-dl. Parameter and argument should be
@@ -587,6 +984,8 @@ Program Behavior
     information to mpv. Take note that SOCKS proxies aren't supported and
     https URLs also bypass the proxy. This is a limitation in FFmpeg.
 
+    This is a key/value list option. See `List Options`_ for details.
+
     .. admonition:: Example
 
         - ``--ytdl-raw-options=username=user,password=pass``
@@ -599,11 +998,22 @@ Program Behavior
     binding (default: yes). By default, the ``i`` key is used (``I`` to make
     the overlay permanent).
 
+``--load-osd-console=<yes|no>``
+    Enable the builtin script that shows a console on a key binding and lets
+    you enter commands (default: yes). By default,. The ``´`` key is used to
+    show the console, and ``ESC`` to hide it again. (This is based on  a user
+    script called ``repl.lua``.)
+
+``--load-auto-profiles=<yes|no|auto>``
+    Enable the builtin script that does auto profiles (default: auto). See
+    `Conditional auto profiles`_ for details. ``auto`` will load the script,
+    but immediately unload it if there are no conditional profiles.
+
 ``--player-operation-mode=<cplayer|pseudo-gui>``
     For enabling "pseudo GUI mode", which means that the defaults for some
     options are changed. This option should not normally be used directly, but
     only by mpv internally, or mpv-provided scripts, config files, or .desktop
-    files.
+    files. See `PSEUDO GUI MODE`_ for details.
 
 Video
 -----
@@ -641,25 +1051,41 @@ Video
     The argument selects the drop methods, and can be one of the following:
 
     <no>
-        Disable any framedropping.
+        Disable any frame dropping. Not recommended, for testing only.
     <vo>
         Drop late frames on video output (default). This still decodes and
-        filters all frames, but doesn't render them on the VO. It tries to query
-        the display FPS (X11 only, not correct on multi-monitor systems), or
-        assumes infinite display FPS if that fails. Drops are indicated in
-        the terminal status line as ``Dropped:`` field. If the decoder is too slow,
-        in theory all frames would have to be dropped (because all frames are
-        too late) - to avoid this, frame dropping stops if the effective
-        framerate is below 10 FPS.
+        filters all frames, but doesn't render them on the VO. Drops are
+        indicated in the terminal status line as ``Dropped:`` field.
+
+        In audio sync. mode, this drops frames that are outdated at the time of
+        display. If the decoder is too slow, in theory all frames would have to
+        be dropped (because all frames are too late) - to avoid this, frame
+        dropping stops  if the effective framerate is below 10 FPS.
+
+        In display-sync. modes (see ``--video-sync``), this affects only how
+        A/V drops or repeats frames. If this mode is disabled, A/V desync will
+        in theory not affect video scheduling anymore (much like the
+        ``display-resample-desync`` mode). However, even if disabled, frames
+        will still be skipped (i.e. dropped) according to the ratio between
+        video and display frequencies.
+
+        This is the recommended mode, and the default.
     <decoder>
         Old, decoder-based framedrop mode. (This is the same as ``--framedrop=yes``
         in mpv 0.5.x and before.) This tells the decoder to skip frames (unless
         they are needed to decode future frames). May help with slow systems,
         but can produce unwatchable choppy output, or even freeze the display
-        completely. Not recommended.
+        completely.
+
+        This uses a heuristic which may not make sense, and in  general cannot
+        achieve good results, because the decoder's frame dropping cannot be
+        controlled in a predictable manner. Not recommended.
+
+        Even if you want to use this, prefer ``decoder+vo`` for better results.
+
         The ``--vd-lavc-framedrop`` option controls what frames to drop.
     <decoder+vo>
-        Enable both modes. Not recommended.
+        Enable both modes. Not recommended. Better than just ``decoder`` mode.
 
     .. note::
 
@@ -674,8 +1100,8 @@ Video
 
     This does:
 
-    - Use the demuxer reported FPS for frame dropping. This avoids that the
-      player needs to decode 1 frame in advance, lowering total latency in
+    - Use the demuxer reported FPS for frame dropping. This avoids the
+      player needing to decode 1 frame in advance, lowering total latency in
       effect. This also means that if the demuxer reported FPS is wrong, or
       the video filter chain changes FPS (e.g. deinterlacing), then it could
       drop too many or not enough frames.
@@ -685,8 +1111,7 @@ Video
       frame, so if this is not done, there is some likeliness that the VO has
       to drop some frames if rendering the first frame takes longer than needed.
 
-
-``--display-fps=<fps>``
+``--override-display-fps=<fps>``
     Set the display FPS used with the ``--video-sync=display-*`` modes. By
     default, a detected value is used. Keep in mind that setting an incorrect
     value (even if slightly incorrect) can ruin video playback. On multi-monitor
@@ -696,23 +1121,68 @@ Video
     Set this option only if you have reason to believe the automatically
     determined value is wrong.
 
+``--display-fps=<fps>``
+    Deprecated alias for ``--override-display-fps``.
+
 ``--hwdec=<api>``
     Specify the hardware video decoding API that should be used if possible.
     Whether hardware decoding is actually done depends on the video codec. If
     hardware decoding is not possible, mpv will fall back on software decoding.
 
+    Hardware decoding is not enabled by default, because it is typically an
+    additional source of errors. It is worth using only if your CPU is too
+    slow to decode a specific video.
+
+    .. note::
+
+        Use the ``Ctrl+h`` shortcut to toggle hardware decoding at runtime. It
+        toggles this option between ``auto`` and ``no``.
+
+        Always enabling HW decoding by putting it into the config file is
+        discouraged. If you use the Ubuntu package, delete ``/etc/mpv/mpv.conf``,
+        as the package tries to enable HW decoding by default by setting
+        ``hwdec=vaapi`` (which is less than ideal, and may even cause
+        sub-optimal wrappers to be used). Or at least change it to
+        ``hwdec=auto-safe``.
+
+    Use one of the auto modes if you want to enable hardware decoding.
+    Explicitly selecting the mode is mostly meant for testing and debugging.
+    It's a bad idea to put explicit selection into the config file if you
+    want thing to just keep working after updates and so on.
+
+    .. note::
+
+        Even if enabled, hardware decoding is still only white-listed for some
+        codecs. See ``--hwdec-codecs`` to enable hardware decoding in more cases.
+
+    .. admonition:: Which method to choose?
+
+        - If you only want to enable hardware decoding at runtime, don't set the
+          parameter, or put ``hwdec=no`` into your ``mpv.conf`` (relevant on
+          distros which force-enable it by default, such as on Ubuntu). Use the
+          ``Ctrl+h`` default binding to enable it at runtime.
+        - If you're not sure, but want hardware decoding always enabled by
+          default, put ``hwdec=auto-safe`` into your ``mpv.conf``, and
+          acknowledge that this use case is not "really" supported and may cause
+          problems.
+        - If you want to test available hardware decoding methods, pass
+          ``--hwdec=auto --hwdec-codecs=all`` and look at the terminal output.
+        - If you're a developer, or want to perform elaborate tests, you may
+          need any of the other possible option values.
+
     ``<api>`` can be one of the following:
 
     :no:        always use software decoding (default)
-    :auto:      enable best hw decoder (see below)
+    :auto:      forcibly enable any hw decoder found (see below)
     :yes:       exactly the same as ``auto``
+    :auto-safe: enable any whitelisted hw decoder (see below)
     :auto-copy: enable best hw decoder with copy-back (see below)
-    :vdpau:     requires ``--vo=gpu`` or ``--vo=vdpau`` (Linux only)
+    :vdpau:     requires ``--vo=gpu`` with X11, or ``--vo=vdpau`` (Linux only)
     :vdpau-copy: copies video back into system RAM (Linux with some GPUs only)
     :vaapi:     requires ``--vo=gpu`` or ``--vo=vaapi`` (Linux only)
     :vaapi-copy: copies video back into system RAM (Linux with some GPUs only)
     :videotoolbox: requires ``--vo=gpu`` (OS X 10.8 and up),
-                   or ``--vo=opengl-cb`` (iOS 9.0 and up)
+                   or ``--vo=libmpv`` (iOS 9.0 and up)
     :videotoolbox-copy: copies video back into system RAM (OS X 10.8 or iOS 9.0 and up)
     :dxva2:     requires ``--vo=gpu`` with ``--gpu-context=d3d11``,
                 ``--gpu-context=angle`` or ``--gpu-context=dxinterop``
@@ -725,10 +1195,10 @@ Video
     :mediacodec-copy: copies video back to system RAM (Android only)
     :mmal:      requires ``--vo=gpu`` (Raspberry Pi only - default if available)
     :mmal-copy: copies video back to system RAM (Raspberry Pi only)
-    :cuda:      requires ``--vo=gpu`` (Any platform CUDA is available)
-    :cuda-copy: copies video back to system RAM (Any platform CUDA is available)
     :nvdec:     requires ``--vo=gpu`` (Any platform CUDA is available)
     :nvdec-copy: copies video back to system RAM (Any platform CUDA is available)
+    :cuda:      requires ``--vo=gpu`` (Any platform CUDA is available)
+    :cuda-copy: copies video back to system RAM (Any platform CUDA is available)
     :crystalhd: copies video back to system RAM (Any platform supported by hardware)
     :rkmpp:     requires ``--vo=gpu`` (some RockChip devices only)
 
@@ -739,49 +1209,53 @@ Video
     work, it will always fall back to software decoding, instead of trying the
     next method (might matter on some Linux systems).
 
+    ``auto-safe`` is similar to ``auto``, but allows only whitelisted methods
+    that are considered "safe". This is supposed to be a reasonable way to
+    enable hardware decdoding by default in a config file (even though you
+    shouldn't do that anyway; prefer runtime enabling with ``Ctrl+h``). Unlike
+    ``auto``, this will not try to enable unknown or known-to-be-bad methods. In
+    addition, this may disable hardware decoding in other situations when it's
+    known to cause problems, but currently this mechanism is quite primitive.
+    (As an example for something that still causes problems: certain
+    combinations of HEVC and Intel chips on Windows tend to cause mpv to crash,
+    most likely due to driver bugs.)
+
+    ``auto-copy-safe`` selects the union of methods selected with ``auto-safe``
+    and ``auto-copy``.
+
     ``auto-copy`` selects only modes that copy the video data back to system
     memory after decoding. This selects modes like ``vaapi-copy`` (and so on).
-    If none of these work, hardware decoding is disabled. This mode is always
-    guaranteed to incur no additional loss compared to software decoding, and
-    will allow CPU processing with video filters.
+    If none of these work, hardware decoding is disabled. This mode is usually
+    guaranteed to incur no additional quality loss compared to software
+    decoding (assuming modern codecs and an error free video stream), and will
+    allow CPU processing with video filters. This mode works with all video
+    filters and VOs.
 
-    The ``vaapi`` mode, if used with ``--vo=gpu``, requires Mesa 11 and most
-    likely works with Intel GPUs only. It also requires the opengl EGL backend.
-
-    The ``cuda`` and ``cuda-copy`` modes provides deinterlacing in the decoder
-    which is useful as there is no other deinterlacing mechanism in the gpu
-    output path. To use this deinterlacing you must pass the option:
-    ``vd-lavc-o=deint=[weave|bob|adaptive]``.
-    Pass ``weave`` (or leave the option unset) to not attempt any
-    deinterlacing. ``cuda`` should always be preferred unless the ``gpu``
-    vo is not being used or filters are required.
-
-    ``nvdec`` is a newer implementation of CUVID/CUDA decoding, which uses the
-    FFmpeg decoders for file parsing. Experimental, is known not to correctly
-    check whether decoding is supported by the hardware at all. Deinterlacing
-    is not supported. Since this uses FFmpeg's codec parsers, it is expected
-    that this generally causes fewer issues than ``cuda``.
-
-    Most video filters will not work with hardware decoding as they are
-    primarily implemented on the CPU. Some exceptions are ``vdpaupp``,
-    ``vdpaurb`` and ``vavpp``. See `VIDEO FILTERS`_ for more details.
-
-    The ``...-copy`` modes (e.g. ``dxva2-copy``) allow you to use hardware
-    decoding with any VO, backend or filter. Because these copy the decoded
-    video back to system RAM, they're likely less efficient than the direct
-    modes (like e.g. ``dxva2``), and probably not more efficient than software
-    decoding except for some codecs (e.g. HEVC).
-
-    .. note::
-
-        When using this switch, hardware decoding is still only done for some
-        codecs. See ``--hwdec-codecs`` to enable hardware decoding for more
-        codecs.
+    Because these copy the decoded video back to system RAM, they're often less
+    efficient than the direct modes, and may not help too much over software
+    decoding.
 
     .. note::
 
        Most non-copy methods only work with the OpenGL GPU backend. Currently,
-       only the ``nvdec`` and ``cuda`` methods work with Vulkan.
+       only the ``vaapi``, ``nvdec`` and ``cuda`` methods work with Vulkan.
+
+    The ``vaapi`` mode, if used with ``--vo=gpu``, requires Mesa 11, and most
+    likely works with Intel and AMD GPUs only. It also requires the opengl EGL
+    backend.
+
+    ``nvdec`` and ``nvdec-copy`` are the newest, and recommended method to do
+    hardware decoding on Nvidia GPUs.
+
+    ``cuda`` and ``cuda-copy`` are an older implementation of hardware decoding
+    on Nvidia GPUs that uses Nvidia's bitstream parsers rather than FFmpeg's.
+    This can lead to feature deficiencies, such as incorrect playback of HDR
+    content, and ``nvdec``/``nvdec-copy`` should always be preferred unless you
+    specifically need Nvidia's deinterlacing algorithms. To use this
+    deinterlacing you must pass the option:
+    ``vd-lavc-o=deint=[weave|bob|adaptive]``.
+    Pass ``weave`` (or leave the option unset) to not attempt any
+    deinterlacing.
 
     .. admonition:: Quality reduction with hardware decoding
 
@@ -799,23 +1273,14 @@ Video
         cases, hardware decoding can also reduce the bit depth of the decoded
         image, which can introduce banding or precision loss for 10-bit files.
 
-        ``vdpau`` is usually safe. If deinterlacing enabled (or the ``vdpaupp``
-        video filter is active in general), it forces RGB conversion. The latter
-        currently does not treat certain colorspaces like BT.2020 correctly
-        (which is mostly a mpv-specific restriction). The ``vdpauprb`` video
-        filter retrieves image data without RGB conversion and is safe (but
-        precludes use of vdpau postprocessing).
+        ``vdpau`` always does RGB conversion in hardware, which does not
+        support newer colorspaces like BT.2020 correctly. However, ``vdpau``
+        doesn't support 10 bit or HDR encodings, so these limitations are
+        unlikely to be relevant.
 
-        ``vaapi`` is safe if the ``vaapi-egl`` backend is indicated in the
-        logs. If ``vaapi-glx`` is indicated, and the video colorspace is either
-        BT.601 or BT.709, a forced, low-quality but correct RGB conversion is
-        performed. Otherwise, the result will be totally incorrect.
-
-        ``d3d11va`` is safe when used with the ``d3d11`` backend. If used with
-        ``angle`` is it usually safe, except that 10 bit input (HEVC main 10
-        profiles) will be rounded down to 8 bits, which will result in reduced
-        quality. Also note that with very old ANGLE builds (without
-        ``EGL_KHR_stream path``,) all input will be converted to RGB.
+        ``vaapi`` and ``d3d11va`` are safe. Enabling deinterlacing (or simply
+        their respective post-processing filters) will possibly at least reduce
+        color quality by converting the output to a 8 bit format.
 
         ``dxva2`` is not safe. It appears to always use BT.601 for forced RGB
         conversion, but actual behavior depends on the GPU drivers. Some drivers
@@ -827,10 +1292,11 @@ Video
         ``rpi`` always uses the hardware overlay renderer, even with
         ``--vo=gpu``.
 
-        ``cuda`` should be safe, but it has been reported to corrupt the
-        timestamps causing glitched, flashing frames on some files. It can also
-        sometimes cause massive framedrops for unknown reasons. Caution is
-        advised.
+        ``cuda`` should usually be safe, but depending on how a file/stream
+        has been mixed, it has been reported to corrupt the timestamps causing
+        glitched, flashing frames. It can also sometimes cause massive
+        framedrops for unknown reasons. Caution is advised, and ``nvdec``
+        should always be preferred.
 
         ``crystalhd`` is not safe. It always converts to 4:2:2 YUV, which
         may be lossy, depending on how chroma sub-sampling is done during
@@ -856,13 +1322,13 @@ Video
     This option is for troubleshooting hwdec interop issues. Since it's a
     debugging option, its semantics may change at any time.
 
-    This is useful for the ``gpu`` and ``opengl-cb`` VOs for selecting which
+    This is useful for the ``gpu`` and ``libmpv`` VOs for selecting which
     hwdec interop context to use exactly. Effectively it also can be used
     to block loading of certain backends.
 
     If set to ``auto`` (default), the behavior depends on the VO: for ``gpu``,
     it does nothing, and the interop context is loaded on demand (when the
-    decoder probes for ``--hwdec`` support). For ``opengl-cb``, which has
+    decoder probes for ``--hwdec`` support). For ``libmpv``, which has
     has no on-demand loading, this is equivalent to ``all``.
 
     The empty string is equivalent to ``auto``.
@@ -880,6 +1346,21 @@ Video
     barely related to this anymore, but will be somewhat compatible in some
     cases.
 
+``--hwdec-extra-frames=<N>``
+    Number of GPU frames hardware decoding should preallocate (default: see
+    ``--list-options`` output). If this is too low, frame allocation may fail
+    during decoding, and video frames might get dropped and/or corrupted.
+    Setting it too high simply wastes GPU memory and has no advantages.
+
+    This value is used only for hardware decoding APIs which require
+    preallocating surfaces (known examples include ``d3d11va`` and ``vaapi``).
+    For other APIs, frames are allocated as needed. The details depend on the
+    libavcodec implementations of the hardware decoders.
+
+    The required number of surfaces depends on dynamic runtime situations. The
+    default is a fixed value that is thought to be sufficient for most uses. But
+    in certain situations, it may not be enough.
+
 ``--hwdec-image-format=<name>``
     Set the internal pixel format used by hardware decoding via ``--hwdec``
     (default ``no``). The special value ``no`` selects an implementation
@@ -893,17 +1374,18 @@ Video
 
 ``--cuda-decode-device=<auto|0..>``
     Choose the GPU device used for decoding when using the ``cuda`` or
-    ``nvdec`` hwdecs with the OpenGL GPU backend.
+    ``nvdec`` hwdecs with the OpenGL GPU backend, and with the ``cuda-copy``
+    or ``nvdec-copy`` hwdecs in all cases.
 
-    By default, the device that is being used to provide ``gpu`` output will
-    also be used for decoding (and in the vast majority of cases, only one
-    GPU will be present).
+    For the OpenGL GPU backend, the default device used for decoding is the one
+    being used to provide ``gpu`` output (and in the vast majority of cases,
+    only one GPU will be present).
 
-    Note that when using the ``cuda-copy`` or ``nvdec-copy`` hwdec, a
-    different option must be passed: ``--vd-lavc-o=gpu=<0..>``.
+    For the ``copy`` hwdecs, the default device will be the first device
+    enumerated by the CUDA libraries - however that is done.
 
-    Note that this option is not available with the Vulkan GPU backend. With
-    Vulkan, decoding must always happen on the display device.
+    For the Vulkan GPU backend, decoding must always happen on the display
+    device, and this option has no effect.
 
 ``--vaapi-device=<device file>``
     Choose the DRM device for ``vaapi-copy``. This should be the path to a
@@ -917,9 +1399,9 @@ Video
 
     This option has no effect if ``--video-unscaled`` option is used.
 
-``--video-aspect=<ratio|no>``
+``--video-aspect-override=<ratio|no>``
     Override video aspect ratio, in case aspect information is incorrect or
-    missing in the file being played. See also ``--no-video-aspect``.
+    missing in the file being played.
 
     These values have special meaning:
 
@@ -931,13 +1413,13 @@ Video
 
     .. admonition:: Examples
 
-        - ``--video-aspect=4:3``  or ``--video-aspect=1.3333``
-        - ``--video-aspect=16:9`` or ``--video-aspect=1.7777``
-        - ``--no-video-aspect`` or ``--video-aspect=no``
+        - ``--video-aspect-override=4:3``  or ``--video-aspect-override=1.3333``
+        - ``--video-aspect-override=16:9`` or ``--video-aspect-override=1.7777``
+        - ``--no-video-aspect-override`` or ``--video-aspect-override=no``
 
 ``--video-aspect-method=<bitstream|container>``
     This sets the default video aspect determination method (if the aspect is
-    _not_ overridden by the user with ``--video-aspect`` or others).
+    _not_ overridden by the user with ``--video-aspect-override`` or others).
 
     :container: Strictly prefer the container aspect ratio. This is apparently
                 the default behavior with VLC, at least with Matroska. Note that
@@ -986,22 +1468,6 @@ Video
     which means the value ``0`` would rotate the video according to the
     rotation metadata.)
 
-``--video-stereo-mode=<no|mode>``
-    Set the stereo 3D output mode (default: ``mono``). This is mostly broken and
-    thus deprecated.
-
-    The pseudo-mode ``no`` disables automatic conversion completely.
-
-    The mode ``mono`` is an alias to ``ml``, which refers to the left frame in
-    2D. This is the default, which means mpv will try to show 3D movies in 2D,
-    instead of the mangled 3D image not intended for consumption (such as
-    showing the left and right frame side by side, etc.).
-
-    Use ``--video-stereo-mode=help`` to list all available modes. Check with
-    the ``stereo3d`` filter documentation to see what the names mean. Note that
-    some names refer to modes not supported by ``stereo3d`` - these modes can
-    appear in files, but can't be handled properly by mpv.
-
 ``--video-zoom=<value>``
     Adjust the video display scale factor by the given value. The parameter is
     given log 2. For example, ``--video-zoom=0`` is unscaled,
@@ -1009,6 +1475,15 @@ Video
     the size, and so on.
 
     This option is disabled if the ``--no-keepaspect`` option is used.
+
+``--video-scale-x=<value>``, ``--video-scale-y=<value>``
+    Multiply the video display size with the given value (default: 1.0). If a
+    non-default value is used, this will be different from the window size, so
+    video will be either cut off, or black bars are added.
+
+    This value is multiplied with the value derived from ``--video-zoom`` and
+    the normal video aspect aspect ratio. This option is disabled if the
+    ``--no-keepaspect`` option is used.
 
 ``--video-align-x=<-1-1>``, ``--video-align-y=<-1-1>``
     Moves the video rectangle within the black borders, which are usually added
@@ -1021,6 +1496,30 @@ Video
     If video and screen aspect match perfectly, these options do nothing.
 
     This option is disabled if the ``--no-keepaspect`` option is used.
+
+``--video-margin-ratio-left=<val>``, ``--video-margin-ratio-right=<val>``, ``--video-margin-ratio-top=<val>``, ``--video-margin-ratio-bottom=<val>``
+    Set extra video margins on each border (default: 0). Each value is a ratio
+    of the window size, using a range 0.0-1.0. For example, setting the option
+    ``--video-margin-ratio-right=0.2`` at a window size of 1000 pixels will add
+    a 200 pixels border on the right side of the window.
+
+    The video is "boxed" by these margins. The window size is not changed. In
+    particular it does not enlarge the window, and the margins will cause the
+    video to be downscaled by default. This may or may not change in the future.
+
+    The margins are applied after 90° video rotation, but before any other video
+    transformations.
+
+    This option is disabled if the ``--no-keepaspect`` option is used.
+
+    Subtitles still may use the margins, depending on ``--sub-use-margins`` and
+    similar options.
+
+    These options were created for the OSC. Some odd decisions, such as making
+    the margin values a ratio (instead of pixels), were made for the sake of
+    the OSC. It's possible that these options may be replaced by ones that are
+    more generally useful. The behavior of these options may change to fit
+    OSC requirements better, too.
 
 ``--correct-pts``, ``--no-correct-pts``
     ``--no-correct-pts`` switches mpv to a mode where video timing is
@@ -1116,6 +1615,11 @@ Video
     (default: 3). If this is a number, then fallback will be triggered if
     N frames fail to decode in a row. 1 is equivalent to ``yes``.
 
+    Setting this to a higher number might break the playback start fallback: if
+    a fallback happens, parts of the file will be skipped, approximately by to
+    the number of packets that could not be decoded. Values below an unspecified
+    count will not have this problem, because mpv retains the packets.
+
 ``--vd-lavc-dr=<yes|no>``
     Enable direct rendering (default: yes). If this is set to ``yes``, the
     video will be decoded directly to GPU video memory (or staging buffers).
@@ -1147,6 +1651,8 @@ Video
     Some options which used to be direct options can be set with this
     mechanism, like ``bug``, ``gray``, ``idct``, ``ec``, ``vismv``,
     ``skip_top`` (was ``st``), ``skip_bottom`` (was ``sb``), ``debug``.
+
+    This is a key/value list option. See `List Options`_ for details.
 
     .. admonition:: Example
 
@@ -1205,6 +1711,13 @@ Video
     this can break on streams not encoded by x264, or if a stream encoded by a
     newer x264 version contains no version info.
 
+``--swapchain-depth=<N>``
+    Allow up to N in-flight frames. This essentially controls the frame
+    latency. Increasing the swapchain depth can improve pipelining and prevent
+    missed vsyncs, but increases visible latency. This option only mandates an
+    upper limit, the implementation can use a lower latency than requested
+    internally. A setting of 1 means that the VO will wait for every frame to
+    become visible before starting to render the next frame. (Default: 3)
 
 Audio
 -----
@@ -1384,7 +1897,7 @@ Audio
     other players) ignore this for the sake of better audio quality.
 
 ``--ad-lavc-downmix=<yes|no>``
-    Whether to request audio channel downmixing from the decoder (default: yes).
+    Whether to request audio channel downmixing from the decoder (default: no).
     Some decoders, like AC-3, AAC and DTS, can remix audio on decoding. The
     requested number of output channels is set with the ``--audio-channels`` option.
     Useful for playing surround audio on a stereo system.
@@ -1399,6 +1912,8 @@ Audio
     Pass AVOptions to libavcodec decoder. Note, a patch to make the o=
     unneeded and pass all unknown options through the AVOption system is
     welcome. A full list of AVOptions can be found in the FFmpeg manual.
+
+    This is a key/value list option. See `List Options`_ for details.
 
 ``--ad-spdif-dtshd=<yes|no>``, ``--dtshd``, ``--no-dtshd``
     If DTS is passed through, use DTS-HD.
@@ -1487,7 +2002,7 @@ Audio
 ``--audio-files=<files>``
     Play audio from an external file while viewing a video.
 
-    This is a list option. See `List Options`_ for details.
+    This is a path list option. See `List Options`_ for details.
 
 ``--audio-file=<file>``
     CLI/config file only alias for ``--audio-files-append``. Each use of this
@@ -1527,6 +2042,8 @@ Audio
             an implementation detail, and can change from version to version.
             Currently, the device is kept even if the sample format changes,
             but the sample formats are convertible.
+            If video is still going on when there is still audio, trying to use
+            gapless is also explicitly given up.
 
     .. note::
 
@@ -1566,6 +2083,8 @@ Audio
 ``--audio-file-paths=<path1:path2:...>``
     Equivalent to ``--sub-file-paths`` option, but for auto-loaded audio files.
 
+    This is a path list option. See `List Options`_ for details.
+
 ``--audio-client-name=<name>``
     The application name the player reports to the audio API. Can be useful
     if you want to force a different audio profile (e.g. with PulseAudio),
@@ -1596,6 +2115,11 @@ Audio
     the audio device will still be closed immediately.
 
     Not all AOs support this.
+
+    .. admonition:: Warning
+
+        This modifies certain subtle player behavior, like A/V-sync and underrun
+        handling. Enabling this option is strongly discouraged.
 
 ``--audio-wait-open=<secs>``
     This makes sense for use with ``--audio-stream-silence=yes``. If this option
@@ -1639,7 +2163,7 @@ Subtitles
     and ``--secondary-sid`` to select the second index. (The index is printed
     on the terminal output after the ``--sid=`` in the list of streams.)
 
-    ``--sub-files`` is a list option (see `List Options`_  for details), and
+    ``--sub-files`` is a path list option (see `List Options`_  for details), and
     can take multiple file names separated by ``:`` (Unix) or ``;`` (Windows),
     while  ``--sub-file`` takes a single filename, but can be used multiple
     times to add multiple files. Technically, ``--sub-file`` is a CLI/config
@@ -1705,18 +2229,26 @@ Subtitles
 
     Default: no.
 
-``--embeddedfonts``, ``--no-embeddedfonts``
+``--embeddedfonts=<yes|no>``
     Use fonts embedded in Matroska container files and ASS scripts (default:
-    enabled). These fonts can be used for SSA/ASS subtitle rendering.
+    yes). These fonts can be used for SSA/ASS subtitle rendering.
 
-``--sub-pos=<0-100>``
+``--sub-pos=<0-150>``
     Specify the position of subtitles on the screen. The value is the vertical
-    position of the subtitle in % of the screen height.
+    position of the subtitle in % of the screen height. 100 is the original
+    position, which is often not the absolute bottom of the screen, but with
+    some margin between the bottom and the subtitle. Values above 100 move the
+    subtitle further down.
 
-    .. note::
+    .. admonition:: Warning
+
+        Text subtitles (as opposed to image subtitles) may be cut off if the
+        value of the option is above 100. This is a libass restriction.
 
         This affects ASS subtitles as well, and may lead to incorrect subtitle
-        rendering. Use with care, or use ``--sub-margin-y`` instead.
+        rendering in addition to the problem above.
+
+        Using ``--sub-margin-y`` can achieve this in a better way.
 
 ``--sub-speed=<0.1-10.0>``
     Multiply the subtitle event timestamps with the given value. Can be used
@@ -1730,6 +2262,8 @@ Subtitles
 
 ``--sub-ass-force-style=<[Style.]Param=Value[,...]>``
     Override some style or script info parameters.
+
+    This is a string list option. See `List Options`_ for details.
 
     .. admonition:: Examples
 
@@ -1792,6 +2326,9 @@ Subtitles
     :strip: Radically strip all ASS tags and styles from the subtitle. This
             is equivalent to the old ``--no-ass`` / ``--no-sub-ass`` options.
 
+    This also controls some bitmap subtitle overrides, as well as HTML tags in
+    formats like SRT, despite the name of the option.
+
 ``--sub-ass-force-margins``
     Enables placing toptitles and subtitles in black borders when they are
     available, if the subtitles are in the ASS format.
@@ -1827,7 +2364,7 @@ Subtitles
 
 ``--sub-ass-vsfilter-blur-compat=<yes|no>``
     Scale ``\blur`` tags by video resolution instead of script resolution
-    (enabled by default). This is bug in VSFilter, which according to some,
+    (disabled by default). This is bug in VSFilter, which according to some,
     can't be fixed anymore in the name of compatibility.
 
     Note that this uses the actual video resolution for calculating the
@@ -1917,7 +2454,8 @@ Subtitles
     default.
 
     :no:    Don't automatically load external subtitle files.
-    :exact: Load the media filename with subtitle file extension (default).
+    :exact: Load the media filename with subtitle file extension and possibly
+            language suffixes (default).
     :fuzzy: Load all subs containing media filename.
     :all:   Load all subs in the current and ``--sub-file-paths`` directories.
 
@@ -1948,15 +2486,23 @@ Subtitles
     This option changed in mpv 0.23.0. Support for the old syntax was fully
     removed in mpv 0.24.0.
 
+    .. note::
+
+        This works for text subtitle files only. Other types of subtitles (in
+        particular subtitles in mkv files) are always assumed to be UTF-8.
+
 
 ``--sub-fix-timing=<yes|no>``
     Adjust subtitle timing is to remove minor gaps or overlaps between
     subtitles (if the difference is smaller than 210 ms, the gap or overlap
     is removed).
 
-``--sub-forced-only``
+``--sub-forced-only=<auto|yes|no>``
     Display only forced subtitles for the DVD subtitle stream selected by e.g.
-    ``--slang``.
+    ``--slang`` (default: ``auto``). When set to ``auto``, enabled when the
+    ``--subs-with-matching-audio`` option is on and a non-forced stream is selected.
+    Enabling this will hide all subtitles in streams that don't make a distinction
+    between forced and unforced events within a stream.
 
 ``--sub-fps=<rate>``
     Specify the framerate of the subtitle file (default: video fps). Affects
@@ -2008,7 +2554,7 @@ Subtitles
         - ``/path/to/video/subtitles/``
         -  the ``sub`` configuration subdirectory (usually ``~/.config/mpv/sub/``)
 
-    This is a list option. See `List Options`_ for details.
+    This is a path list option. See `List Options`_ for details.
 
 ``--sub-visibility``, ``--no-sub-visibility``
     Can be used to disable display of subtitles, but still select and decode
@@ -2182,6 +2728,47 @@ Subtitles
 
     Default: ``no``.
 
+``--sub-filter-regex-...=...``
+    Set a list of regular expressions to match on text subtitles, and remove any
+    lines that match (default: empty). This is a string list option. See
+    `List Options`_ for details. Normally, you should use
+    ``--sub-filter-regex-append=<regex>``, where each option use will append a
+    new regular expression, without having to fight escaping problems.
+
+    List items are matched in order. If a regular expression matches, the
+    process is stopped, and the subtitle line is discarded. The text matched
+    against is, currently, always the ``Text`` field of ASS events (if the
+    subtitle format is different, it is always converted). This may include
+    formatting tags. Matching is case-insensitive, but how this is done depends
+    on the libc, and most likely works in ASCII only. It does not work on
+    bitmap/image subtitles. Unavailable on inferior OSes (requires POSIX regex
+    support).
+
+    .. admonition:: Example
+
+        ``--sub-filter-regex-append=opensubtitles\.org`` filters some ads.
+
+    Technically, using a list for matching is redundant, since you could just
+    use a single combined regular expression. But it helps with diagnosis,
+    ease of use, and temporarily disabling or enabling individual filters.
+
+    .. warning::
+
+        This is experimental. The semantics most likely will change, and if you
+        use this, you should be prepared to update the option later. Ideas
+        include replacing the regexes with a very primitive and small subset of
+        sed, or some method to control case-sensitivity.
+
+``--sub-filter-regex-warn=<yes|no>``
+    Log dropped lines with warning log level, instead of verbose (default: no).
+    Helpful for testing.
+
+``--sub-filter-regex-enable=<yes|no>``
+    Whether to enable regex filtering (default: yes). Note that if no regexes
+    are added to the ``--sub-filter-regex`` list, setting this option to ``yes``
+    has no default. It's meant to easily disable or enable filtering
+    temporarily.
+
 ``--sub-create-cc-track=<yes|no>``
     For every video stream, create a closed captions track (default: no). The
     only purpose is to make the track available for selection at the start of
@@ -2193,6 +2780,20 @@ Subtitles
 
     If the video stream contains no closed captions, or if no video is being
     decoded, the CC track will remain empty and will not show any text.
+
+``--sub-font-provider=<auto|none|fontconfig>``
+    Which libass font provider backend to use (default: auto). ``auto`` will
+    attempt to use the native font provider: fontconfig on Linux, CoreText on
+    OSX, DirectWrite on Windows. ``fontconfig`` forces fontconfig, if libass
+    was built with support (if not, it behaves like ``none``).
+
+    The ``none`` font provider effectively disables system fonts. It will still
+    attempt to use embedded fonts (unless ``--embeddedfonts=no`` is set; this is
+    the same behavior as with all other font providers), ``subfont.ttf`` if
+    provided, and fonts in  the ``fonts`` sub-directory if provided. (The
+    fallback is more strict than that of other font providers, and if a font
+    name does not match, it may prefer not to render any text that uses the
+    missing font.)
 
 Window
 ------
@@ -2229,8 +2830,8 @@ Window
 ``--fs-screen=<all|current|0-32>``
     In multi-monitor configurations (i.e. a single desktop that spans across
     multiple displays), this option tells mpv which screen to go fullscreen to.
-    If ``default`` is provided mpv will fallback on using the behavior
-    depending on what the user provided with the ``screen`` option.
+    If ``current`` is used mpv will fallback on what the user provided with
+    the ``screen`` option.
 
     .. admonition:: Note (X11)
 
@@ -2361,7 +2962,7 @@ Window
     (X11 only)
     Show the video window on all virtual desktops.
 
-``--geometry=<[W[xH]][+-x+-y]>``, ``--geometry=<x:y>``
+``--geometry=<[W[xH]][+-x+-y][/WS]>``, ``--geometry=<x:y>``
     Adjust the initial window position or size. ``W`` and ``H`` set the window
     size in pixels. ``x`` and ``y`` set the window position, measured in pixels
     from the top-left corner of the screen to the top-left corner of the image
@@ -2370,7 +2971,9 @@ Window
     Positions are specified similar to the standard X11 ``--geometry`` option
     format, in which e.g. +10-50 means "place 10 pixels from the left border and
     50 pixels from the lower border" and "--20+-10" means "place 20 pixels
-    beyond the right and 10 pixels beyond the top border".
+    beyond the right and 10 pixels beyond the top border". A trailing ``/``
+    followed by an integer denotes on which workspace (virtual desktop) the
+    window should appear (X11 only).
 
     If an external window is specified using the ``--wid`` option, this
     option is ignored.
@@ -2407,9 +3010,10 @@ Window
             Forces the window width and height to half the screen width and
             height. Will show black borders to compensate for the video aspect
             ratio (with most VOs and without ``--no-keepaspect``).
-        ``50%+10+10``
+        ``50%+10+10/2``
             Sets the window to half the screen widths, and positions it 10
-            pixels below/left of the top left corner of the screen.
+            pixels below/left of the top left corner of the screen, on the
+            second workspace.
 
     See also ``--autofit`` and ``--autofit-larger`` for fitting the window into
     a given size without changing aspect ratio.
@@ -2482,6 +3086,23 @@ Window
     For example, ``--window-scale=0.5`` would show the window at half the
     video size.
 
+``--window-minimized=<yes|no>``
+    Whether the video window is minimized or not. Setting this will minimize,
+    or unminimze, the video window if the current VO supports it. Note that
+    some VOs may support minimization while not supporting unminimization
+    (eg: Wayland).
+
+    Whether this option and ``--window-maximized`` work on program start or
+    at runtime, and whether they're (at runtime) updated to reflect the actual
+    window state, heavily depends on the VO and the windowing system. Some VOs
+    simply do not implement them or parts of them, while other VOs may be
+    restricted by the windowing systems (especially Wayland).
+
+``--window-maximized=<yes|no>``
+    Whether the video window is maximized or not. Setting this will maximize,
+    or unmaximize, the video window if the current VO supports it. See
+    ``--window-minimized`` for further remarks.
+
 ``--cursor-autohide=<number|no|always>``
     Make mouse cursor automatically hide after given number of milliseconds.
     ``no`` will disable cursor autohide. ``always`` means the cursor will stay
@@ -2526,7 +3147,7 @@ Window
     previous setting (e.g. in the config file). Overrides the
     ``--monitorpixelaspect`` setting if enabled.
 
-    See also ``--monitorpixelaspect`` and ``--video-aspect``.
+    See also ``--monitorpixelaspect`` and ``--video-aspect-override``.
 
     .. admonition:: Examples
 
@@ -2534,10 +3155,10 @@ Window
         - ``--monitoraspect=16:9`` or ``--monitoraspect=1.7777``
 
 ``--hidpi-window-scale``, ``--no-hidpi-window-scale``
-    (OS X and X11 only)
+    (OS X, Windows, X11, and Wayland only)
     Scale the window size according to the backing scale factor (default: yes).
     On regular HiDPI resolutions the window opens with double the size but appears
-    as having the same size as on none-HiDPI resolutions. This is the default OS X
+    as having the same size as on non-HiDPI resolutions. This is the default OS X
     behavior.
 
 ``--native-fs``, ``--no-native-fs``
@@ -2547,7 +3168,7 @@ Window
 ``--monitorpixelaspect=<ratio>``
     Set the aspect of a single pixel of your monitor or TV screen (default:
     1). A value of 1 means square pixels (correct for (almost?) all LCDs). See
-    also ``--monitoraspect`` and ``--video-aspect``.
+    also ``--monitoraspect`` and ``--video-aspect-override``.
 
 ``--stop-screensaver``, ``--no-stop-screensaver``
     Turns off the screensaver (or screen blanker and similar mechanisms) at
@@ -2555,7 +3176,8 @@ Window
     always re-enabled when the player is paused.
 
     This is not supported on all video outputs or platforms. Sometimes it is
-    implemented, but does not work (especially with Linux "desktops").
+    implemented, but does not work (especially with Linux "desktops"). Read the
+    `Disabling Screensaver`_ section very carefully.
 
 ``--wid=<ID>``
     This tells mpv to attach to an existing window. If a VO is selected that
@@ -2780,6 +3402,8 @@ Demuxer
     be found in the FFmpeg manual. Note that some options may conflict
     with mpv options.
 
+    This is a key/value list option. See `List Options`_ for details.
+
     .. admonition:: Example
 
         ``--demuxer-lavf-o=fflags=+ignidx``
@@ -2794,6 +3418,34 @@ Demuxer
     (default: 32768). Lowering the size could lower latency. Note that
     libavformat might reallocate the buffer internally, or not fully use all
     of it.
+
+``--demuxer-lavf-linearize-timestamps=<yes|no|auto>``
+    Attempt to linearize timestamp resets in demuxed streams (default: auto).
+    This was tested only for single audio streams. It's unknown whether it
+    works correctly for video (but likely won't). Note that the implementation
+    is slightly incorrect either way, and will introduce a discontinuity by
+    about 1 codec frame size.
+
+    The ``auto`` mode enables this for OGG audio stream. This covers the common
+    and annoying case of OGG web radio streams. Some of these will reset
+    timestamps to 0 every time a new song begins. This breaks the mpv seekable
+    cache, which can't deal with timestamp resets. Note that FFmpeg/libavformat's
+    seeking API can't deal with this either; it's likely that if this option
+    breaks this even more, while if it's disabled, you can at least seek within
+    the first song in the stream. Well, you won't get anything useful either
+    way if the seek is outside of mpv's cache.
+
+``--demuxer-lavf-propagate-opts=<yes|no>``
+    Propagate FFmpeg-level options to recursively opened connections (default:
+    yes). This is needed because FFmpeg will apply these settings to nested
+    AVIO contexts automatically. On the other hand, this could break in certain
+    situations - it's the FFmpeg API, you just can't win.
+
+    This affects in particular the ``--timeout`` option and anything passed
+    with ``--demuxer-lavf-o``.
+
+    If this option is deemed unnecessary at some point in the future, it will
+    be removed without notice.
 
 ``--demuxer-mkv-subtitle-preroll=<yes|index|no>``, ``--mkv-subtitle-preroll``
     Try harder to show embedded soft subtitles when seeking somewhere. Normally,
@@ -2845,6 +3497,12 @@ Demuxer
 
 ``--demuxer-mkv-subtitle-preroll-secs-index=<value>``
     See ``--demuxer-mkv-subtitle-preroll``.
+
+``--demuxer-mkv-probe-start-time=<yes|no>``
+    Check the start time of Matroska files (default: yes). This simply reads the
+    first cluster timestamps and assumes it is the start time. Technically, this
+    also reads the first timestamp, which may increase latency by one frame
+    (which may be relevant for live streams).
 
 ``--demuxer-mkv-probe-video-duration=<yes|no|full>``
     When opening the file, seek to the end of it, and check what timestamp the
@@ -2898,6 +3556,9 @@ Demuxer
 ``--demuxer-rawvideo-size=<value>``
     Frame size in bytes when using ``--demuxer=rawvideo``.
 
+``--demuxer-cue-codepage=<codepage>``
+    Specify the CUE sheet codepage. (See ``--sub-codepage`` for details.)
+
 ``--demuxer-max-bytes=<bytesize>``
     This controls how much the demuxer is allowed to buffer ahead. The demuxer
     will normally try to read ahead as much as necessary, or as much is
@@ -2915,12 +3576,21 @@ Demuxer
 
 ``--demuxer-max-back-bytes=<bytesize>``
     This controls how much past data the demuxer is allowed to preserve. This
-    is useful only if the ``--demuxer-seekable-cache`` option is enabled.
+    is useful only if the cache is enabled.
+
     Unlike the forward cache, there is no control how many seconds are actually
     cached - it will simply use as much memory this option allows. Setting this
     option to 0 will strictly disable any back buffer, but this will lead to
     the situation that the forward seek range starts after the current playback
     position (as it removes past packets that are seek points).
+
+    If the end of the file is reached, the remaining unused forward buffer space
+    is "donated" to the backbuffer (unless the backbuffer size is set to 0, or
+    ``--demuxer-donate-buffer`` is set to ``no``).
+    This still limits the total cache usage to the sum of the forward and
+    backward cache, and effectively makes better use of the total allowed memory
+    budget. (The opposite does not happen: free backward buffer is never
+    "donated" to the forward buffer.)
 
     Keep in mind that other buffers in the player (like decoders) will cause the
     demuxer to cache "future" frames in the back buffer, which can skew the
@@ -2928,22 +3598,44 @@ Demuxer
 
     See ``--list-options`` for defaults and value range.
 
+``--demuxer-donate-buffer=<yes|no>``
+    Whether to let the back buffer use part of the forward buffer (default: yes).
+    If set to ``yes``, the "donation" behavior described in the option
+    description for ``--demuxer-max-back-bytes`` is enabled. This means the
+    back buffer may use up memory up to the sum of the forward and back buffer
+    options, minus the active size of the forward buffer. If set to ``no``, the
+    options strictly limit the forward and back buffer sizes separately.
+
+    Note that if the end of the file is reached, the buffered data stays the
+    same, even if you seek back within the cache. This is because the back
+    buffer is only reduced when new data is read.
+
 ``--demuxer-seekable-cache=<yes|no|auto>``
-    This controls whether seeking can use the demuxer cache (default: auto). If
-    enabled, short seek offsets will not trigger a low level demuxer seek
+    Debugging option to control whether seeking can use the demuxer cache
+    (default: auto). Normally you don't ever need to set this; the default
+    ``auto`` does the right thing and enables cache seeking it if ``--cache``
+    is set to ``yes`` (or is implied ``yes`` if ``--cache=auto``).
+
+    If enabled, short seek offsets will not trigger a low level demuxer seek
     (which means for example that slow network round trips or FFmpeg seek bugs
     can be avoided). If a seek cannot happen within the cached range, a low
     level seek will be triggered. Seeking outside of the cache will start a new
     cached range, but can discard the old cache range if the demuxer exhibits
     certain unsupported behavior.
 
-    Keep in mind that some events can flush the cache or force a low level
-    seek anyway, such as switching tracks, or attempting to seek before the
-    start or after the end of the file.
-
     The special value ``auto`` means ``yes`` in the same situation as
     ``--cache-secs`` is used (i.e. when the stream appears to be a network
     stream or the stream cache is enabled).
+
+``--demuxer-force-retry-on-eof=<yes|no>``
+    Whether to keep retrying making the demuxer thread read more packets each
+    time the decoder dequeues a packet, even if the end of the file was reached
+    (default: no). This does not really make sense, but was the default behavior
+    in mpv 0.32.0 and earlier. This option will be silently removed after a
+    while, and exists only to restore the old behavior for testing, in case this
+    was actually needed somewhere. This does _not_ help with files that are
+    being appended to (in these cases use ``appending://``, or disable the
+    cache).
 
 ``--demuxer-thread=<yes|no>``
     Run the demuxer in a separate thread, and let it prefetch a certain amount
@@ -2973,8 +3665,13 @@ Demuxer
     a timestamp difference higher than the readahead amount relative to the
     last packet returned to the decoder, the demuxer keeps reading.
 
-    Note that the ``--cache-secs`` option will override this value if a cache
-    is enabled, and the value is larger.
+    Note that enabling the cache (such as ``--cache=yes``, or if the input
+    is considered a network stream, and ``--cache=auto`` is used), this option
+    is mostly ignored. (``--cache-secs`` will override this. Technically, the
+    maximum of both options is used.)
+
+    The main purpose of this option is to limit the readhead for local playback,
+    since a large readahead value is not overly useful in this case.
 
     (This value tends to be fuzzy, because many file formats don't store linear
     timestamps.)
@@ -3005,6 +3702,26 @@ Demuxer
     pipe, or it's an http stream with a server that doesn't support range
     requests), seeking will be disabled. This option can forcibly enable it.
     For seeks within the cache, there's a good chance of success.
+
+``--demuxer-cache-wait=<yes|no>``
+    Before starting playback, read data until either the end of the file was
+    reached, or the demuxer cache has reached maximum capacity. Only once this
+    is done, playback starts. This intentionally happens before the initial
+    seek triggered with ``--start``. This does not change any runtime behavior
+    after the initial caching. This option is useless if the file cannot be
+    cached completely.
+
+``--rar-list-all-volumes=<yes|no>``
+    When opening multi-volume rar files, open all volumes to create a full list
+    of contained files (default: no). If disabled, only the archive entries
+    whose headers are located within the first volume are listed (and thus
+    played when opening a .rar file with mpv). Doing so speeds up opening, and
+    the typical idiotic use-case of playing uncompressed multi-volume rar files
+    that contain a single media file is made faster.
+
+    Opening is still slow, because for unknown, idiotic, and unnecessary reasons
+    libarchive opens all volumes anyway when playing the main file, even though
+    mpv iterated no archive entries yet.
 
 Input
 -----
@@ -3052,20 +3769,6 @@ Input
     work (key bindings that normally quit will be shown on OSD only, just
     like any other binding). See `INPUT.CONF`_.
 
-``--input-file=<filename>``
-    Read commands from the given file. Mostly useful with a FIFO. Since
-    mpv 0.7.0 also understands JSON commands (see `JSON IPC`_), but you can't
-    get replies or events. Use ``--input-ipc-server`` for something
-    bi-directional. On MS Windows, JSON commands are not available.
-
-    This can also specify a direct file descriptor with ``fd://N`` (UNIX only).
-    In this case, JSON replies will be written if the FD is writable.
-
-    .. note::
-
-        When the given file is a FIFO mpv opens both ends, so you can do several
-        `echo "seek 10" > mp_pipe` and the pipe will stay valid.
-
 ``--input-terminal``, ``--no-input-terminal``
     ``--no-input-terminal`` prevents the player from reading key events from
     standard input. Useful when reading data from standard input. This is
@@ -3088,9 +3791,39 @@ Input
 
     See `JSON IPC`_ for details.
 
-``--input-appleremote=<yes|no>``
-    (OS X only)
-    Enable/disable Apple Remote support. Enabled by default (except for libmpv).
+``--input-ipc-client=fd://<N>``
+    Connect a single IPC client to the given FD. This is somewhat similar to
+    ``--input-ipc-server``, except no socket is created, and instead the passed
+    FD is treated like a socket connection received from ``accept()``. In
+    practice, you could pass either a FD created by ``socketpair()``, or a pipe.
+    In both cases, you must sure the FD is actually inherited by mpv (do not
+    set the POSIX ``CLOEXEC`` flag).
+
+    The player quits when the connection is closed.
+
+    This is somewhat similar to the removed ``--input-file`` option, except it
+    supports only integer FDs, and cannot open actual paths.
+
+    .. admonition:: Example
+
+        ``--input-ipc-client=fd://123``
+
+    .. note::
+
+        Does not and will not work on Windows.
+
+    .. warning::
+
+        Writing to the ``input-ipc-server`` option at runtime will start another
+        instance of an IPC client handler for the ``input-ipc-client`` option,
+        because initialization is bundled, and this thing is stupid. This is a
+        bug. Writing to ``input-ipc-client`` at runtime will start another IPC
+        client handler for the new value, without stopping the old one, even if
+        the FD value is the same (but the string is different e.g. due to
+        whitespace). This is not a bug.
+
+``--input-gamepad=<yes|no>``
+    Enable/disable SDL2 Gamepad support. Disabled by default.
 
 ``--input-cursor``, ``--no-input-cursor``
     Permit mpv to receive pointer events reported by the video output
@@ -3324,6 +4057,10 @@ OSD
     This option is somewhat experimental and could be replaced by another
     mechanism in the future.
 
+``--osd-font-provider=<...>``
+    See ``--sub-font-provider`` for details and accepted values. Note that
+    unlike subtitles, OSD never uses embedded fonts from media files.
+
 Screenshot
 ----------
 
@@ -3335,6 +4072,7 @@ Screenshot
     :png:       PNG
     :jpg:       JPEG (default)
     :jpeg:      JPEG (alias for jpg)
+    :webp:      WebP
 
 ``--screenshot-tag-colorspace=<yes|no>``
     Tag screenshots with the appropriate colorspace.
@@ -3468,6 +4206,17 @@ Screenshot
     of compression that can be achieved. For most images, "mixed" achieves the
     best compression ratio, hence it is the default.
 
+``--screenshot-webp-lossless=<yes|no>``
+    Write lossless WebP files. ``--screenshot-webp-quality`` is ignored if this
+    is set. The default is no.
+
+``--screenshot-webp-quality=<0-100>``
+    Set the WebP quality level. Higher means better quality. The default is 75.
+
+``--screenshot-webp-compression=<0-6>``
+    Set the WebP compression level. Higher means better compression, but takes
+    more CPU time. Note that this also affects the screenshot quality when used
+    with lossy WebP files. The default is 4.
 
 Software Scaler
 ---------------
@@ -3498,6 +4247,83 @@ Software Scaler
 
 ``--sws-cvs=<v>``
     Software scaler chroma vertical shifting. See ``--sws-scaler``.
+
+``--sws-bitexact=<yes|no>``
+    Unknown functionality (default: no). Consult libswscale source code. The
+    primary purpose of this, as far as libswscale API goes), is to produce
+    exactly the same output for the same input on all platforms (output has the
+    same "bits" everywhere, thus "bitexact"). Typically disables optimizations.
+
+``--sws-fast=<yes|no>``
+    Allow optimizations that help with performance, but reduce quality (default:
+    no).
+
+    VOs like ``drm`` and ``x11`` will benefit a lot from using ``--sws-fast``.
+    You may need to set other options, like ``--sws-scaler``. The builtin
+    ``sws-fast`` profile sets this option and some others to gain performance
+    for reduced quality. Also see ``--sws-allow-zimg``.
+
+``--sws-allow-zimg=<yes|no>``
+    Allow using zimg (if the component using the internal swscale wrapper
+    explicitly allows so) (default: yes). In this case, zimg *may* be used, if
+    the internal zimg wrapper supports the input and output formats. It will
+    silently or noisily fall back to libswscale if one of these conditions does
+    not apply.
+
+    If zimg is used, the other ``--sws-`` options are ignored, and the
+    ``--zimg-`` options are used instead.
+
+    If the internal component using the swscale wrapper hooks up logging
+    correctly, a verbose priority log message will indicate whether zimg is
+    being used.
+
+    Most things which need software conversion can make use of this.
+
+    .. note::
+
+        Do note that zimg *may* be slower than libswscale. Usually,
+        it's faster on x86 platforms, but slower on ARM (due to lack of ARM
+        specific optimizations). The mpv zimg wrapper uses unoptimized repacking
+        for some formats, for which zimg cannot be blamed.
+
+``--zimg-scaler=<point|bilinear|bicubic|spline16|spline36|lanczos>``
+    Zimg luma scaler to use (default: lanczos).
+
+``--zimg-scaler-param-a=<default|float>``, ``--zimg-scaler-param-b=<default|float>``
+    Set scaler parameters. By default, these are set to the special string
+    ``default``, which maps to a scaler-specific default value. Ignored if the
+    scaler is not tunable.
+
+    ``lanczos``
+        ``--zimg-scaler-param-a`` is the number of taps.
+
+    ``bicubic``
+        a and b are the bicubic b and c parameters.
+
+``--zimg-scaler-chroma=...``
+    Same as ``--zimg-scaler``, for for chroma interpolation (default: bilinear).
+
+``--zimg-scaler-chroma-param-a``, ``--zimg-scaler-chroma-param-b``
+    Same as ``--zimg-scaler-param-a`` / ``--zimg-scaler-param-b``, for chroma.
+
+``--zimg-dither=<no|ordered|random|error-diffusion>``
+    Dithering (default: random).
+
+``--zimg-threads=<auto|integer>``
+    Set the maximum number of threads to use for scaling (default: auto).
+    ``auto`` uses the number of logical cores on the current machine. Note that
+    the scaler may use less threads (or even just 1 thread) depending on stuff.
+    Passing a value of 1 disables threading and always scales the image in a
+    single operation. Higher thread counts waste resources, but make it
+    typically faster.
+
+    Note that some zimg git versions had bugs that will corrupt the output if
+    threads are used.
+
+``--zimg-fast=<yes|no>``
+    Allow optimizations that help with performance, but reduce quality (default:
+    yes). Currently, this may simplify gamma conversion operations.
+
 
 Audio Resampler
 ---------------
@@ -3546,6 +4372,8 @@ It also sets the defaults for the ``lavrresample`` audio filter.
 ``--audio-swresample-o=<string>``
     Set AVOptions on the SwrContext or AVAudioResampleContext. These should
     be documented by FFmpeg or Libav.
+
+    This is a key/value list option. See `List Options`_ for details.
 
 Terminal
 --------
@@ -3651,196 +4479,23 @@ Terminal
     Print out a custom string during playback instead of the standard status
     line. Expands properties. See `Property Expansion`_.
 
+``--term-title=<string>``
+    Set the terminal title. Currently, this simply concatenates the escape
+    sequence setting the window title with the provided (property expanded)
+    string. This will mess up if the expanded string contain bytes that end the
+    escape sequence, or if the terminal does not understand the sequence. The
+    latter probably includes the regrettable win32.
+
+    Expands properties. See `Property Expansion`_.
+
 ``--msg-module``
     Prepend module name to each console message.
 
 ``--msg-time``
-    Prepend timing information to each console message.
-
-
-TV
---
-
-``--tv-...``
-    These options tune various properties of the TV capture module. For
-    watching TV with mpv, use ``tv://`` or ``tv://<channel_number>`` or
-    even ``tv://<channel_name>`` (see option ``tv-channels`` for ``channel_name``
-    below) as a media URL. You can also use ``tv:///<input_id>`` to start
-    watching a video from a composite or S-Video input (see option ``input`` for
-    details).
-
-``--tv-device=<value>``
-    Specify TV device (default: ``/dev/video0``).
-
-``--tv-channel=<value>``
-    Set tuner to <value> channel.
-
-``--no-tv-audio``
-    no sound
-
-``--tv-automute=<0-255> (v4l and v4l2 only)``
-    If signal strength reported by device is less than this value, audio
-    and video will be muted. In most cases automute=100 will be enough.
-    Default is 0 (automute disabled).
-
-``--tv-driver=<value>``
-    See ``--tv=driver=help`` for a list of compiled-in TV input drivers.
-    available: dummy, v4l2 (default: autodetect)
-
-``--tv-input=<value>``
-    Specify input (default: 0 (TV), see console output for available
-    inputs).
-
-``--tv-freq=<value>``
-    Specify the frequency to set the tuner to (e.g. 511.250). Not
-    compatible with the channels parameter.
-
-``--tv-outfmt=<value>``
-    Specify the output format of the tuner with a preset value supported
-    by the V4L driver (YV12, UYVY, YUY2, I420) or an arbitrary format given
-    as hex value.
-
-``--tv-width=<value>``
-    output window width
-
-``--tv-height=<value>``
-    output window height
-
-``--tv-fps=<value>``
-    framerate at which to capture video (frames per second)
-
-``--tv-buffersize=<value>``
-    maximum size of the capture buffer in megabytes (default: dynamical)
-
-``--tv-norm=<value>``
-    See the console output for a list of all available norms.
-
-    See also: ``--tv-normid``.
-
-``--tv-normid=<value> (v4l2 only)``
-    Sets the TV norm to the given numeric ID. The TV norm depends on the
-    capture card. See the console output for a list of available TV norms.
-
-``--tv-chanlist=<value>``
-    available: argentina, australia, china-bcast, europe-east,
-    europe-west, france, ireland, italy, japan-bcast, japan-cable,
-    newzealand, russia, southafrica, us-bcast, us-cable, us-cable-hrc
-
-``--tv-channels=<chan>-<name>[=<norm>],<chan>-<name>[=<norm>],...``
-    Set names for channels.
-
-    .. note::
-
-        If <chan> is an integer greater than 1000, it will be treated as
-        frequency (in kHz) rather than channel name from frequency table.
-        Use _ for spaces in names (or play with quoting ;-) ). The channel
-        names will then be written using OSD, and the input commands
-        ``tv_step_channel``, ``tv_set_channel`` and ``tv_last_channel``
-        will be usable for a remote control. Not compatible with
-        the ``frequency`` parameter.
-
-    .. note::
-
-        The channel number will then be the position in the 'channels'
-        list, beginning with 1.
-
-    .. admonition:: Examples
-
-        ``tv://1``, ``tv://TV1``, ``tv_set_channel 1``,
-        ``tv_set_channel TV1``
-
-``--tv-[brightness|contrast|hue|saturation]=<-100-100>``
-    Set the image equalizer on the card.
-
-``--tv-audiorate=<value>``
-    Set input audio sample rate.
-
-``--tv-forceaudio``
-    Capture audio even if there are no audio sources reported by v4l.
-
-``--tv-alsa``
-    Capture from ALSA.
-
-``--tv-amode=<0-3>``
-    Choose an audio mode:
-
-    :0: mono
-    :1: stereo
-    :2: language 1
-    :3: language 2
-
-``--tv-forcechan=<1-2>``
-    By default, the count of recorded audio channels is determined
-    automatically by querying the audio mode from the TV card. This option
-    allows forcing stereo/mono recording regardless of the amode option
-    and the values returned by v4l. This can be used for troubleshooting
-    when the TV card is unable to report the current audio mode.
-
-``--tv-adevice=<value>``
-    Set an audio device. <value> should be ``/dev/xxx`` for OSS and a
-    hardware ID for ALSA. You must replace any ':' by a '.' in the
-    hardware ID for ALSA.
-
-``--tv-audioid=<value>``
-    Choose an audio output of the capture card, if it has more than one.
-
-``--tv-[volume|bass|treble|balance]=<0-100>``
-    These options set parameters of the mixer on the video capture card.
-    They will have no effect, if your card does not have one. For v4l2 50
-    maps to the default value of the control, as reported by the driver.
-
-``--tv-gain=<0-100>``
-    Set gain control for video devices (usually webcams) to the desired
-    value and switch off automatic control. A value of 0 enables automatic
-    control. If this option is omitted, gain control will not be modified.
-
-``--tv-immediatemode=<bool>``
-    A value of 0 means capture and buffer audio and video together. A
-    value of 1 (default) means to do video capture only and let the audio
-    go through a loopback cable from the TV card to the sound card.
-
-``--tv-mjpeg``
-    Use hardware MJPEG compression (if the card supports it). When using
-    this option, you do not need to specify the width and height of the
-    output window, because mpv will determine it automatically from
-    the decimation value (see below).
-
-``--tv-decimation=<1|2|4>``
-    choose the size of the picture that will be compressed by hardware
-    MJPEG compression:
-
-    :1: full size
-
-        - 704x576 PAL
-        - 704x480 NTSC
-
-    :2: medium size
-
-        - 352x288 PAL
-        - 352x240 NTSC
-
-    :4: small size
-
-        - 176x144 PAL
-        - 176x120 NTSC
-
-``--tv-quality=<0-100>``
-    Choose the quality of the JPEG compression (< 60 recommended for full
-    size).
-
-``--tv-scan-autostart``
-    Begin channel scanning immediately after startup (default: disabled).
-
-``--tv-scan-period=<0.1-2.0>``
-    Specify delay in seconds before switching to next channel (default:
-    0.5). Lower values will cause faster scanning, but can detect inactive
-    TV channels as active.
-
-``--tv-scan-threshold=<1-100>``
-    Threshold value for the signal strength (in percent), as reported by
-    the device (default: 50). A signal strength higher than this value will
-    indicate that the currently scanning channel is active.
-
+    Prepend timing information to each console message. The time is in
+    microseconds since the player process was started (technically, slightly
+    later actually), using a monotonic time source depending on the OS. This
+    is ``CLOCK_MONOTONIC`` on sane UNIX variants.
 
 Cache
 -----
@@ -3848,22 +4503,67 @@ Cache
 ``--cache=<yes|no|auto>``
     Decide whether to use network cache settings (default: auto).
 
-    If enabled, use the maximum of ``--cache-secs`` and ``--demuxer-max-bytes``
-    for the cache size. If disabled, ``--cache-pause`` and related are
-    implicitly disabled.
+    If enabled, use up to ``--cache-secs`` for the cache size (but still limited
+    to ``--demuxer-max-bytes``), and make the cached data seekable (if possible).
+    If disabled, ``--cache-pause`` and related are implicitly disabled.
 
-    The ``auto`` choice sets this depending on whether the stream is thought to
-    involve network accesses (this is an imperfect heuristic).
+    The ``auto`` choice enables this depending on whether the stream is thought
+    to involve network accesses or other slow media (this is an imperfect
+    heuristic).
+
+    Before mpv 0.30.0, this used to accept a number, which specified the size
+    of the cache in kilobytes. Use e.g. ``--cache --demuxer-max-bytes=123k``
+    instead.
 
 ``--no-cache``
     Turn off input stream caching. See ``--cache``.
 
 ``--cache-secs=<seconds>``
+    Deprecated. Once this option is removed, there will be no way to limit the
+    cache size by time (only by size with ``--demuxer-max-bytes``). This option
+    is considered useless, since there is no good reason to limit the cache by
+    time, and the default value of this option is already something very high.
+    The interaction with the other cache options is also confusing.
+
     How many seconds of audio/video to prefetch if the cache is active. This
     overrides the ``--demuxer-readahead-secs`` option if and only if the cache
     is enabled and the value is larger. The default value is set to something
     very high, so the actually achieved readahead will usually be limited by
-    the value of the ``--demuxer-max-bytes`` option.
+    the value of the ``--demuxer-max-bytes`` option. Setting this option is
+    usually only useful for limiting readahead.
+
+``--cache-on-disk=<yes|no>``
+    Write packet data to a temporary file, instead of keeping them in memory.
+    This makes sense only with ``--cache``. If the normal cache is disabled,
+    this option is ignored.
+
+    You need to set ``--cache-dir`` to use this.
+
+    The cache file is append-only. Even if the player appears to prune data, the
+    file space freed by it is not reused. The cache file is deleted when
+    playback is closed.
+
+    Note that packet metadata is still kept in memory. ``--demuxer-max-bytes``
+    and related options are applied to metadata *only*. The size of this
+    metadata  varies, but 50 MB per hour of media is typical. The cache
+    statistics will report this metadats size, instead of the size of the cache
+    file. If the metadata hits the size limits, the metadata is pruned (but not
+    the cache file).
+
+    When the media is closed, the cache file is deleted. A cache file is
+    generally worthless after the media is closed, and it's hard to retrieve
+    any media data from it (it's not supported by design).
+
+    If the option is enabled at runtime, the cache file is created, but old data
+    will remain in the memory cache. If the option is disabled at runtime, old
+    data remains in the disk cache, and the cache file is not closed until the
+    media is closed. If the option is disabled and enabled again, it will
+    continue to use the cache file that was opened first.
+
+``--cache-dir=<path>``
+    Directory where to create temporary files (default: none).
+
+    Currently, this is used for ``--cache-on-disk`` only.
 
 ``--cache-pause=<yes|no>``
     Whether the player should automatically pause when the cache runs out of
@@ -3876,8 +4576,8 @@ Cache
     to control how long the player rebuffers if ``--cache-pause`` is enabled,
     and the demuxer underruns. If the given time is higher than the maximum
     set with ``--cache-secs`` or  ``--demuxer-readahead-secs``, or prefetching
-    ends before that for some other reason (like file end), playback resumes
-    earlier.
+    ends before that for some other reason (like file end or maximum configured
+    cache size reached), playback resumes earlier.
 
 ``--cache-pause-initial=<yes|no>``
     Enter "buffering" mode before starting playback (default: no). This can be
@@ -3893,6 +4593,99 @@ Cache
 
     This option also triggers when playback is restarted after seeking.
 
+``--cache-unlink-files=<immediate|whendone|no>``
+    Whether or when to unlink cache files (default: immediate). This affects
+    cache files which are inherently temporary, and which make no sense to
+    remain on disk after the player terminates. This is a debugging option.
+
+    ``immediate``
+        Unlink cache file after they were created. The cache files won't be
+        visible anymore, even though they're in use. This ensures they are
+        guaranteed to be removed from disk when the player terminates, even if
+        it crashes.
+
+    ``whendone``
+        Delete cache files after they are closed.
+
+    ``no``
+        Don't delete cache files. They will consume disk space without having a
+        use.
+
+    Currently, this is used for ``--cache-on-disk`` only.
+
+``--stream-buffer-size=<bytesize>``
+    Size of the low level stream byte buffer (default: 128KB). This is used as
+    buffer between demuxer and low level I/O (e.g. sockets). Generally, this
+    can be very small, and the main purpose is similar to the internal buffer
+    FILE in the C standard library will have.
+
+    Half of the buffer is always used for guaranteed seek back, which is
+    important for unseekable input.
+
+    There are known cases where this can help performance to set a large buffer:
+
+        1. mp4 files. libavformat may trigger many small seeks in both
+           directions, depending on how the file was muxed.
+
+        2. Certain network filesystems, which do not have a cache, and where
+           small reads can be inefficient.
+
+    In other cases, setting this to a large value can reduce performance.
+
+    Usually, read accesses are at half the buffer size, but it may happen that
+    accesses are done alternating with smaller and larger sizes (this is due to
+    the internal ring buffer wrap-around).
+
+    See ``--list-options`` for defaults and value range. ``<bytesize>`` options
+    accept suffixes such as ``KiB`` and ``MiB``.
+
+``--vd-queue-enable=<yes|no>, --ad-queue-enable``
+    Enable running the video/audio decoder on a separate thread (default: no).
+    If enabled, the decoder is run on a separate thread, and a frame queue is
+    put between decoder and higher level playback logic. The size of the frame
+    queue is defined by the other options below.
+
+    This is probably quite pointless. libavcodec already has multithreaded
+    decoding (enabled by default), which makes this largely unnecessary. It
+    might help in some corner cases with high bandwidth video that is slow to
+    decode (in these cases libavcodec would block the playback logic, while
+    using a decoding thread would distribute the decoding time evenly without
+    affecting the playback logic). In other situations, it will simply make
+    seeking slower and use significantly more memory.
+
+    The queue size is restricted by the other ``--vd-queue-...`` options. The
+    final queue size is the minimum as indicated by the option with the lowest
+    limit. Each decoder/track has its own queue that may use the full configured
+    queue size.
+
+    Most queue options can be changed at runtime. ``--vd-queue-enable`` itself
+    (and the audio equivalent) update only if decoding is completely
+    reinitialized. However, setting ``--vd-queue-max-samples=1`` should almost
+    lead to the same behavior as ``--vd-queue-enable=no``, so that value can
+    be used for effectively runtime enabling/disabling the queue.
+
+    This should not be used with hardware decoding. It is possible to enable
+    this for audio, but it makes even less sense.
+
+``--vd-queue-max-bytes=<bytesize>``, ``--ad-queue-max-bytes``
+    Maximum approximate allowed size of the queue. If exceeded, decoding will
+    be stopped. The maximum size can be exceeded by about 1 frame.
+
+    See ``--list-options`` for defaults and value range. ``<bytesize>`` options
+    accept suffixes such as ``KiB`` and ``MiB``.
+
+``--vd-queue-max-samples=<int>``, ``--ad-queue-max-samples``
+    Maximum number of frames (video) or samples (audio) of the queue. The audio
+    size may be exceeded by about 1 frame.
+
+    See ``--list-options`` for defaults and value range.
+
+``--vd-queue-max-secs=<seconds>``, ``--ad-queue-max-secs``
+    Maximum number of seconds of media in the queue. The special value 0 means
+    no limit is set. The queue size may be exceeded by about 2 frames. Timestamp
+    resets may lead to random queue size usage.
+
+    See ``--list-options`` for defaults and value range.
 
 Network
 -------
@@ -3909,6 +4702,8 @@ Network
 
 ``--http-header-fields=<field1,field2>``
     Set custom HTTP fields when accessing HTTP stream.
+
+    This is a string list option. See `List Options`_ for details.
 
     .. admonition:: Example
 
@@ -3953,9 +4748,10 @@ Network
     Specify a referrer path or URL for HTTP requests.
 
 ``--network-timeout=<seconds>``
-    Specify the network timeout in seconds. This affects at least HTTP. The
-    special value 0 (default) uses the FFmpeg/Libav defaults. If a protocol
-    is used which does not support timeouts, this option is silently ignored.
+    Specify the network timeout in seconds (default: 60 seconds). This affects
+    at least HTTP. The special value 0 uses the FFmpeg/Libav defaults. If a
+    protocol is used which does not support timeouts, this option is silently
+    ignored.
 
     .. warning::
 
@@ -3964,10 +4760,12 @@ Network
         option accept different units (seconds instead of microseconds, causing
         mpv to pass it huge values), it will also overflow FFmpeg internal
         calculations. The worst is that merely setting the option will put RTSP
-        into listening mode, which breaks any client uses. Do not use this
-        option with RTSP URLs.
+        into listening mode, which breaks any client uses. At time of this
+        writing, the fix was not made effective yet. For this reason, this
+        option is ignored (or should be ignored) on RTSP URLs. You can still
+        set the timeout option directly with ``--demuxer-lavf-o``.
 
-``--rtsp-transport=<lavf|udp|tcp|http>``
+``--rtsp-transport=<lavf|udp|udp_multicast|tcp|http>``
     Select RTSP transport method (default: tcp). This selects the underlying
     network transport when playing ``rtsp://...`` URLs. The value ``lavf``
     leaves the decision to libavformat.
@@ -3989,6 +4787,13 @@ Network
 
 DVB
 ---
+
+``--dvbin-prog=<string>``
+    This defines the program to tune to. Usually, you may specify this
+    by using a stream URI like ``"dvb://ZDF HD"``, but you can tune to a
+    different channel by writing to this property at runtime.
+    Also see ``dvbin-channel-switch-offset`` for more useful channel
+    switching functionality.
 
 ``--dvbin-card=<0-15>``
     Specifies using card number 0-15 (default: 0).
@@ -4025,6 +4830,15 @@ DVB
     on-the-fly, e.g. for regional news.
 
     Default: ``no``
+
+``--dvbin-channel-switch-offset=<integer>``
+    This value is not meant for setting via configuration, but used in channel
+    switching. An ``input.conf`` can ``cycle`` this value ``up`` and ``down``
+    to perform channel switching. This number effectively gives the offset
+    to the initially tuned to channel in the channel list.
+
+    An example ``input.conf`` could contain:
+    ``H cycle dvbin-channel-switch-offset up``, ``K cycle dvbin-channel-switch-offset down``
 
 ALSA audio output options
 -------------------------
@@ -4082,7 +4896,7 @@ GPU renderer options
 -----------------------
 
 The following video options are currently all specific to ``--vo=gpu`` and
-``--vo=opengl-cb`` only, which are the only VOs that implement them.
+``--vo=libmpv`` only, which are the only VOs that implement them.
 
 ``--scale=<filter>``
     The filter function to use when upscaling video.
@@ -4157,8 +4971,10 @@ The following video options are currently all specific to ``--vo=gpu`` and
     smooth.
 
 ``--scale-param1=<value>``, ``--scale-param2=<value>``, ``--cscale-param1=<value>``, ``--cscale-param2=<value>``, ``--dscale-param1=<value>``, ``--dscale-param2=<value>``, ``--tscale-param1=<value>``, ``--tscale-param2=<value>``
-    Set filter parameters. Ignored if the filter is not tunable. Currently,
-    this affects the following filter parameters:
+    Set filter parameters. By default, these are set to the special string
+    ``default``, which maps to a scaler-specific default value. Ignored if the
+    filter is not tunable. Currently, this affects the following filter
+    parameters:
 
     bcspline
         Spline parameters (``B`` and ``C``). Defaults to 0.5 for both.
@@ -4230,8 +5046,10 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
 ``--scale-wparam=<window>``, ``--cscale-wparam=<window>``, ``--cscale-wparam=<window>``, ``--tscale-wparam=<window>``
     (Advanced users only) Configure the parameter for the window function given
-    by ``--scale-window`` etc. Ignored if the window is not tunable. Currently,
-    this affects the following window parameters:
+    by ``--scale-window`` etc. By default, these are set to the special string
+    ``default``, which maps to a window-specific default value. Ignored if the
+    window is not tunable. Currently, this affects the following window
+    parameters:
 
     kaiser
         Window parameter (alpha). Defaults to 6.33.
@@ -4262,6 +5080,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
     This will perform slightly sub-optimally for anamorphic video (but still
     better than without it) since it will extend the size to match only the
     milder of the scale factors between the axes.
+
+    Note: this option is ignored when using bilinear downscaling (the default).
 
 ``--linear-downscaling``
     Scale in linear light when downscaling. It should only be used with a
@@ -4405,7 +5225,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
     require driver-specific hacks if using multiple monitors, to ensure mpv
     syncs to the right one. Compositing window managers can also lead to bad
     results, as can missing or incorrect display FPS information (see
-    ``--display-fps``).
+    ``--override-display-fps``).
 
 ``--vulkan-swap-mode=<mode>``
     Controls the presentation mode of the vulkan swapchain. This is similar
@@ -4443,8 +5263,19 @@ The following video options are currently all specific to ``--vo=gpu`` and
     GPUs. It's worth noting that if async compute is enabled, and the device
     supports more compute queues than graphics queues (bound by the restrictions
     set by ``--vulkan-queue-count``), mpv will internally try and prefer the
-    use of compute shaders over fragment shaders wherever possible. Not enabled
-    by default, since it seems to cause issues with some drivers.
+    use of compute shaders over fragment shaders wherever possible. Enabled by
+    default, although Nvidia users may want to disable it.
+
+``--vulkan-disable-events``
+    Disable the use of VkEvents, for debugging purposes or for compatibility
+    with some older drivers / vulkan portability layers that don't provide
+    working VkEvent support.
+
+``--d3d11-exclusive-fs=<yes|no>``
+    Switches the D3D11 swap chain fullscreen state to 'fullscreen' when
+    fullscreen video is requested. Also known as "exclusive fullscreen" or
+    "D3D fullscreen" in other applications. Gives mpv full control of
+    rendering on the swap chain's screen. Off by default.
 
 ``--d3d11-warp=<yes|no|auto>``
     Use WARP (Windows Advanced Rasterization Platform) with the D3D11 GPU
@@ -4470,6 +5301,44 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Schedule each frame to be presented for this number of VBlank intervals.
     (default: 1) Setting to 1 will enable VSync, setting to 0 will disable it.
 
+``--d3d11-adapter=<adapter name|help>``
+    Select a specific D3D11 adapter to utilize for D3D11 rendering.
+    Will pick the default adapter if unset. Alternatives are listed
+    when the name "help" is given.
+
+    Checks for matches based on the start of the string, case
+    insensitive. Thus, if the description of the adapter starts with
+    the vendor name, that can be utilized as the selection parameter.
+
+    Hardware decoders utilizing the D3D11 rendering abstraction's helper
+    functionality to receive a device, such as D3D11VA or DXVA2's DXGI
+    mode, will be affected by this choice.
+
+``--d3d11-output-format=<auto|rgba8|bgra8|rgb10_a2|rgba16f>``
+    Select a specific D3D11 output format to utilize for D3D11 rendering.
+    "auto" is the default, which will pick either rgba8 or rgb10_a2 depending
+    on the configured desktop bit depth. rgba16f and bgra8 are left out of
+    the autodetection logic, and are available for manual testing.
+
+    .. note::
+
+        Desktop bit depth querying is only available from an API available
+        from Windows 10. Thus on older systems it will only automatically
+        utilize the rgba8 output format.
+
+``--d3d11-output-csp=<auto|srgb|linear|pq|bt.2020>``
+    Select a specific D3D11 output color space to utilize for D3D11 rendering.
+    "auto" is the default, which will select the color space of the desktop
+    on which the swap chain is located.
+
+    Values other than "srgb" and "pq" have had issues in testing, so they
+    are mostly available for manual testing.
+
+    .. note::
+
+        Swap chain color space configuration is only available from an API
+        available from Windows 10. Thus on older systems it will not work.
+
 ``--d3d11va-zero-copy=<yes|no>``
     By default, when using hardware decoding with ``--gpu-api=d3d11``, the
     video image will be copied (GPU-to-GPU) from the decoder surface to a
@@ -4481,6 +5350,25 @@ The following video options are currently all specific to ``--vo=gpu`` and
     drivers support it.)
 
     Currently only relevant for ``--gpu-api=d3d11``.
+
+``--wayland-app-id=<string>``
+    Set the client app id for Wayland-based video output methods. By default, "mpv"
+    is used.
+
+``--wayland-disable-vsync=<yes|no>``
+    Disable vsync for the wayland contexts (default: no). Useful for benchmarking
+    the wayland context when combined with ``video-sync=display-desync``,
+    ``--no-audio``, and ``--untimed=yes``. Only works with ``--gpu-context=wayland``
+    and ``--gpu-context=waylandvk``.
+
+``--wayland-edge-pixels-pointer=<value>``
+    Defines the size of an edge border (default: 10) to initiate client side
+    resize events in the wayland contexts with the mouse. This is only active if
+    there are no server side decorations from the compositor.
+
+``--wayland-edge-pixels-touch=<value>``
+    Defines the size of an edge border (default: 64) to initiate client side
+    resizes events in the wayland contexts with touch events.
 
 ``--spirv-compiler=<compiler>``
     Controls which compiler is used to translate GLSL to SPIR-V. This is
@@ -4498,11 +5386,15 @@ The following video options are currently all specific to ``--vo=gpu`` and
         This option is deprecated, since there is only one reasonable value.
         It may be removed in the future.
 
-``--glsl-shaders=<file-list>``
+``--glsl-shader=<file>``, ``--glsl-shaders=<file-list>``
     Custom GLSL hooks. These are a flexible way to add custom fragment shaders,
     which can be injected at almost arbitrary points in the rendering pipeline,
-    and access all previous intermediate textures. Each use of the option will
-    add another file to the internal list of shaders (see `List Options`_).
+    and access all previous intermediate textures.
+
+    Each use of the ``--glsl-shader`` option will add another file to the
+    internal list of shaders, while ``--glsl-shaders`` takes a list of files,
+    and overwrites the internal list with it. The latter is a path list option
+    (see `List Options`_ for details).
 
     .. admonition:: Warning
 
@@ -4862,7 +5754,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Windows with ANGLE only.
 
-``--cocoa-force-dedicated-gpu=<yes|no>``
+``--macos-force-dedicated-gpu=<yes|no>``
     Deactivates the automatic graphics switching and forces the dedicated GPU.
     (default: no)
 
@@ -4874,6 +5766,13 @@ The following video options are currently all specific to ``--vo=gpu`` and
     usual pixel format could not be created, ``yes`` will always only use the
     software renderer, and ``auto`` only falls back to the software renderer
     when the usual pixel format couldn't be created.
+
+    OS X only.
+
+``--cocoa-cb-10bit-context=<yes|no>``
+    Creates a 10bit capable pixel format for the context creation (default: yes).
+    Instead of 8bit integer framebuffer a 16bit half-float framebuffer is
+    requested.
 
     OS X only.
 
@@ -4965,14 +5864,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Android with ``--gpu-context=android`` only.
 
-``--swapchain-depth=<N>``
-    Allow up to N in-flight frames. This essentially controls the frame
-    latency. Increasing the swapchain depth can improve pipelining and prevent
-    missed vsyncs, but increases visible latency. This option only mandates an
-    upper limit, the implementation can use a lower latency than requested
-    internally. A setting of 1 means that the VO will wait for every frame to
-    become visible before starting to render the next frame. (Default: 3)
-
 ``--gpu-sw``
     Continue even if a software renderer is detected.
 
@@ -4984,7 +5875,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
     auto
         auto-select (default)
     cocoa
-        Cocoa/OS X (deprecated, use --vo=opengl-cb instead)
+        Cocoa/OS X (deprecated, use --vo=libmpv instead)
     win
         Win32/WGL
     winvk
@@ -5003,9 +5894,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
         X11/GLX
     x11vk
         VK_KHR_xlib_surface
-    x11probe
-        For internal autoprobing, equivalent to ``x11`` otherwise. Don't use
-        directly, it could be removed without warning as autoprobing is changed.
     wayland
         Wayland/EGL
     waylandvk
@@ -5016,13 +5904,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
         X11/EGL
     android
         Android/EGL. Requires ``--wid`` be set to an ``android.view.Surface``.
-    mali-fbdev
-        Direct fbdev/EGL support on some ARM/MALI devices.
-    vdpauglx
-        Use vdpau presentation with GLX as backing. Experimental use only.
-        Using this will have no advantage (other than additional bugs or
-        performance problems), and is for doing experiments only. Will not
-        be used automatically.
 
 ``--gpu-api=<type>``
     Controls which type of graphics APIs will be accepted:
@@ -5142,8 +6023,14 @@ The following video options are currently all specific to ``--vo=gpu`` and
         Linear light output
     gamma1.8
         Pure power curve (gamma 1.8), also used for Apple RGB
+    gamma2.0
+        Pure power curve (gamma 2.0)
     gamma2.2
         Pure power curve (gamma 2.2)
+    gamma2.4
+        Pure power curve (gamma 2.4)
+    gamma2.6
+        Pure power curve (gamma 2.6)
     gamma2.8
         Pure power curve (gamma 2.8), also used for BT.470-BG
     prophoto
@@ -5176,12 +6063,12 @@ The following video options are currently all specific to ``--vo=gpu`` and
     additional effect of parametrizing the inverse OOTF, in order to get
     colorimetrically consistent results with the mastering display. For SDR, or
     when using an ICC (profile (``--icc-profile``), setting this to a value
-    above 100 essentially causes the display to be treated as if it were an HDR
+    above 203 essentially causes the display to be treated as if it were an HDR
     display in disguise. (See the note below)
 
     In ``auto`` mode (the default), the chosen peak is an appropriate value
-    based on the TRC in use. For SDR curves, it uses 100. For HDR curves, it
-    uses 100 * the transfer function's nominal peak.
+    based on the TRC in use. For SDR curves, it uses 203. For HDR curves, it
+    uses 203 * the transfer function's nominal peak.
 
     .. note::
 
@@ -5229,6 +6116,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
         color/brightness accuracy. This is roughly equivalent to
         ``--tone-mapping=reinhard --tone-mapping-param=0.24``. If possible,
         you should also enable ``--hdr-compute-peak`` for the best results.
+    bt.2390
+        Perceptual tone mapping curve (EETF) specified in ITU-R Report BT.2390.
+        This is the recommended curve to use for typical HDR-mastered content.
         (Default)
     gamma
         Fits a logarithmic transfer between the tone curves.
@@ -5237,8 +6127,10 @@ The following video options are currently all specific to ``--vo=gpu`` and
         the display.
 
 ``--tone-mapping-param=<value>``
-    Set tone mapping parameters. Ignored if the tone mapping algorithm is not
-    tunable. This affects the following tone mapping algorithms:
+    Set tone mapping parameters. By default, this is set to the special string
+    ``default``, which maps to an algorithm-specific default value. Ignored if
+    the tone mapping algorithm is not tunable. This affects the following tone
+    mapping algorithms:
 
     clip
         Specifies an extra linear coefficient to multiply into the signal
@@ -5333,6 +6225,13 @@ The following video options are currently all specific to ``--vo=gpu`` and
     well with ICC profiles, since the 3DLUTs are always generated against the
     source color space and have chromatically-accurate clipping built in.
 
+``--gamut-clipping``
+    If enabled (default: yes), mpv will colorimetrically clip out-of-gamut
+    colors by desaturating them (preserving luma), rather than hard-clipping
+    each component individually. This should make playback of wide gamut
+    content on typical (standard gamut) monitors look much more aesthetically
+    pleasing and less blown-out.
+
 ``--use-embedded-icc-profile``
     Load the embedded ICC profile contained in media files such as PNG images.
     (Default: yes). Note that this option only works when also using a display
@@ -5425,7 +6324,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
         unavailable, it silently falls back on a normal framebuffer. Note that
         if you set the ``--fbo-format`` option to a non-default value, a
         format with alpha must be specified, or this won't work.
-        This does not work on X11 with EGL and Mesa (freedesktop bug 67676).
+        Whether this really works depends on the windowing system and desktop
+        environment.
     no
         Ignore alpha component.
 
@@ -5491,6 +6391,8 @@ Miscellaneous
     The default includes a common list of tags, call mpv with ``--list-options``
     to see it.
 
+    This is a string list option. See `List Options`_ for details.
+
 ``--mc=<seconds/frame>``
     Maximum A-V sync correction per frame (in seconds)
 
@@ -5543,10 +6445,24 @@ Miscellaneous
     making a some idealized assumptions, which may not always apply in reality.
     Behavior can depend on the VO and the system's video and audio drivers.
     Media files must use constant framerate. Section-wise VFR might work as well
-    with some container formats (but not e.g. mkv). If the sync code detects
-    severe A/V desync, or the framerate cannot be detected, the player
-    automatically reverts to ``audio`` mode for some time or permanently. These
-    modes also require a vsync blocked presentation mode. For OpenGL, this
+    with some container formats (but not e.g. mkv).
+
+    Under some circumstances, the player automatically reverts to ``audio`` mode
+    for some time or permanently. This can happen on very low framerate video,
+    or if the framerate cannot be detected.
+
+    Also in display-sync modes it can happen that interruptions to video
+    playback (such as toggling fullscreen mode, or simply resizing the window)
+    will skip the video frames that should have been displayed, while ``audio``
+    mode will display them after the renderer has resumed (typically resulting
+    in a short A/V desync and the video "catching up").
+
+    Before mpv 0.30.0, there was a fallback to ``audio`` mode on severe A/V
+    desync. This was changed for the sake of not sporadically stopping. Now,
+    ``display-desync`` does what it promises and may desync with audio by an
+    arbitrary amount, until it is manually fixed with a seek.
+
+    These modes also require a vsync blocked presentation mode. For OpenGL, this
     translates to ``--opengl-swapinterval=1``. For Vulkan, it translates to
     ``--vulkan-swap-mode=fifo`` (or ``fifo-relaxed``).
 
@@ -5574,10 +6490,22 @@ Miscellaneous
                         video. See ``--video-sync-adrop-size``. This mode will
                         cause severe audio artifacts if the real monitor
                         refresh rate is too different from the reported or
-                        forced rate.
+                        forced rate. Since mpv 0.33.0, this acts on entire audio
+                        frames, instead of single samples.
     :display-desync:    Sync video to display, and let audio play on its own.
     :desync:            Sync video according to system clock, and let audio play
                         on its own.
+
+``--video-sync-max-factor=<value>``
+    Maximum multiple for which to try to fit the video's FPS to the display's
+    FPS (default: 5).
+
+    For example, if this is set to 1, the video FPS is forced to an integer
+    multiple of the display FPS, as long as the speed change does not exceed
+    the value set by ``--video-sync-max-video-change``.
+
+    This is mostly for testing, and the option may be randomly changed in the
+    future without notice.
 
 ``--video-sync-max-video-change=<value>``
     Maximum speed difference in percent that is applied to video with
@@ -5606,13 +6534,6 @@ Miscellaneous
     frame dropping due to the audio "overshooting" and skipping multiple video
     frames before the sync logic can react.
 
-``--video-sync-adrop-size=<value>``
-    For the ``--video-sync=display-adrop`` mode. This mode duplicates/drops
-    audio data to keep audio in sync with video. To avoid audio artifacts on
-    jitter (which would add/remove samples all the time), this is done in
-    relatively large, fixed units, controlled by this option. The unit is
-    seconds.
-
 ``--mf-fps=<value>``
     Framerate used when decoding from multiple PNG or JPEG files with ``mf://``
     (default: 1).
@@ -5632,6 +6553,8 @@ Miscellaneous
     in verbose mode, i.e. ``--v``. In general we can't print errors, because
     other options such as e.g. user agent are not available with all protocols,
     and printing errors for unknown options would end up being too noisy.)
+
+    This is a key/value list option. See `List Options`_ for details.
 
 ``--vo-mmcss-profile=<name>``
     (Windows only.)
@@ -5663,7 +6586,7 @@ Miscellaneous
     it slightly less intrusive. (In mpv 0.28.0 and before, this was not quite
     strictly enforced.)
 
-    This is a list option. See `List Options`_ for details.
+    This is a path list option. See `List Options`_ for details.
 
 ``--external-file=<file>``
     CLI/config file only alias for ``--external-files-append``. Each use of this
@@ -5680,33 +6603,48 @@ Miscellaneous
     referenced files like with ordered chapters.
 
 ``--record-file=<file>``
+    Deprecated, use ``--stream-record``, or the ``dump-cache`` command.
+
     Record the current stream to the given target file. The target file will
     always be overwritten without asking.
 
-    This remuxes the source stream without reencoding, which makes this a
-    highly fragile and experimental feature. It's entirely possible that this
-    writes files which are broken, not standards compliant, not playable with
-    all players (including mpv), or incomplete.
-
-    The target file format is determined by the file extension of the target
-    filename. It is recommended to use the same target container as the source
-    container if possible, and preferring Matroska as fallback.
-
-    Seeking during stream recording, or enabling/disabling stream recording
-    during playback, can cut off data, or produce "holes" in the output file.
-    These are technical restrictions. In particular, video data or subtitles
-    which were read ahead can produce such holes, which might cause playback
-    problems with various players (including mpv).
-
-    The behavior of this option might changed in the future, such as changing
-    it to a template (similar to ``--screenshot-template``), being renamed,
-    removed, or anything else, until it is declared semi-stable.
+    This was deprecated because it isn't very nice to use. For one, seeking
+    while this is enabled will be directly reflected in the output, which was
+    not useful and annoying.
 
 ``--stream-record=<file>``
-    Similar to ``--record-file``, but write packets as they are received. The
-    implementation of this does not tolerate seeks (outside of demuxer cache),
-    or streams being selected/deselected during recording. Can not be set at
-    runtime. Use with care.
+    Write received/read data from the demuxer to the given output file. The
+    output file will always be overwritten without asking. The output format
+    is determined by the extension of the output file.
+
+    Switching streams or seeking during recording might result in recording
+    being stopped and/or broken files. Use with care.
+
+    Seeking outside of the demuxer cache will result in "skips" in the output
+    file, but seeking within  the demuxer cache should not affect recording. One
+    exception is when you seek back far enough to exceed the forward buffering
+    size, in which case the cache stops actively reading. This will return in
+    dropped data if it's a live stream.
+
+    If this is set at runtime, the old file is closed, and the new file is
+    opened. Note that this will write only data that is appended at the end of
+    the cache, and the already cached data cannot be written. You can try the
+    ``dump-cache`` command as an alternative.
+
+    External files (``--audio-file`` etc.) are ignored by this, it works on the
+    "main" file only. Using this with files using ordered chapters or EDL files
+    will also not work correctly in general.
+
+    There are some glitches with this because it uses FFmpeg's libavformat for
+    writing the output file. For example, it's typical that it will only work if
+    the output format is the same as the input format. This is the case even if
+    it works with the ``ffmpeg`` tool. One reason for this is that ``ffmpeg``
+    and its libraries contain certain hacks and workarounds for these issues,
+    that are unavailable to outside users.
+
+    This replaces ``--record-file``. It is similar to the ancient/removed
+    ``--stream-capture``/``-capture`` options, and provides better behavior in
+    most cases (i.e. actually works).
 
 ``--lavfi-complex=<string>``
     Set a "complex" libavfilter filter, which means a single filter graph can
@@ -5758,3 +6696,33 @@ Miscellaneous
 
     See the FFmpeg libavfilter documentation for details on the available
     filters.
+
+``--metadata-codepage=<codepage>``
+    Codepage for various input metadata (default: ``utf-8``). This affects how
+    file tags, chapter titles, etc. are interpreted. You can for example set
+    this to ``auto`` to enable autodetection of the codepage. (This is not the
+    default because non-UTF-8 codepages are an obscure fringe use-case.)
+
+    See ``--sub-codepage`` option on how codepages are specified and further
+    details regarding autodetection and codepage conversion. (The underlying
+    code is the same.)
+
+    Conversion is not applied to metadata that is updated at runtime.
+
+
+Debugging
+---------
+
+``--unittest=<name>``
+    Run an internal unit test. There are multiple, and the name specifies which.
+
+    The special value ``all-simple`` runs all tests which do not need further
+    setup (other arguments and such). Some tests may need additional arguments
+    to do anything useful.
+
+    On success, the player binary exits with exit status 0, otherwise it returns
+    with an undefined non-0 exit status (it may crash or abort itself on test
+    failures).
+
+    This is only enabled if built with ``--enable-tests``, and should normally
+    be enabled and used by developers only.

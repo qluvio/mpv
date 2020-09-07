@@ -100,6 +100,19 @@ void mp_aframe_unref_data(struct mp_aframe *frame)
     talloc_free(tmp);
 }
 
+// Allocate this much data. Returns false for failure (data already allocated,
+// invalid sample count or format, allocation failures).
+// Normally you're supposed to use a frame pool and mp_aframe_pool_allocate().
+bool mp_aframe_alloc_data(struct mp_aframe *frame, int samples)
+{
+    if (mp_aframe_is_allocated(frame))
+        return false;
+    struct mp_aframe_pool *p = mp_aframe_pool_create(NULL);
+    int r = mp_aframe_pool_allocate(p, frame, samples);
+    talloc_free(p);
+    return r >= 0;
+}
+
 // Return a new reference to the data in av_frame. av_frame itself is not
 // touched. Returns NULL if not representable, or if input is NULL.
 // Does not copy the timestamps.
@@ -121,11 +134,9 @@ struct mp_aframe *mp_aframe_from_avframe(struct AVFrame *av_frame)
     frame->format = format;
     mp_chmap_from_lavc(&frame->chmap, frame->av_frame->channel_layout);
 
-#if LIBAVUTIL_VERSION_MICRO >= 100
     // FFmpeg being a stupid POS again
     if (frame->chmap.num != frame->av_frame->channels)
         mp_chmap_from_channels(&frame->chmap, av_frame->channels);
-#endif
 
     if (av_frame->opaque_ref) {
         struct avframe_opaque *op = (void *)av_frame->opaque_ref->data;
@@ -194,10 +205,8 @@ void mp_aframe_config_copy(struct mp_aframe *dst, struct mp_aframe *src)
     dst->av_frame->sample_rate = src->av_frame->sample_rate;
     dst->av_frame->format = src->av_frame->format;
     dst->av_frame->channel_layout = src->av_frame->channel_layout;
-#if LIBAVUTIL_VERSION_MICRO >= 100
     // FFmpeg being a stupid POS again
     dst->av_frame->channels = src->av_frame->channels;
-#endif
 }
 
 // Copy "soft" attributes from src to dst, excluding things which affect
@@ -311,10 +320,8 @@ bool mp_aframe_set_chmap(struct mp_aframe *frame, struct mp_chmap *in)
         return false;
     frame->chmap = *in;
     frame->av_frame->channel_layout = lavc_layout;
-#if LIBAVUTIL_VERSION_MICRO >= 100
     // FFmpeg being a stupid POS again
     frame->av_frame->channels = frame->chmap.num;
-#endif
     return true;
 }
 
@@ -410,10 +417,16 @@ void mp_aframe_skip_samples(struct mp_aframe *f, int samples)
 {
     assert(samples >= 0 && samples <= mp_aframe_get_size(f));
 
+    if (av_frame_make_writable(f->av_frame) < 0)
+        return; // go complain to ffmpeg
+
     int num_planes = mp_aframe_get_planes(f);
     size_t sstride = mp_aframe_get_sstride(f);
-    for (int n = 0; n < num_planes; n++)
-        f->av_frame->extended_data[n] += samples * sstride;
+    for (int n = 0; n < num_planes; n++) {
+        memmove(f->av_frame->extended_data[n],
+                f->av_frame->extended_data[n] + samples * sstride,
+                (f->av_frame->nb_samples - samples) * sstride);
+    }
 
     f->av_frame->nb_samples -= samples;
 
@@ -448,13 +461,13 @@ void mp_aframe_clip_timestamps(struct mp_aframe *f, double start, double end)
     double rate = mp_aframe_get_effective_rate(f);
     if (f_end == MP_NOPTS_VALUE)
         return;
-    if (af_fmt_is_spdif(mp_aframe_get_format(f)))
-        return;
     if (end != MP_NOPTS_VALUE) {
         if (f_end >= end) {
             if (f->pts >= end) {
                 f->av_frame->nb_samples = 0;
             } else {
+                if (af_fmt_is_spdif(mp_aframe_get_format(f)))
+                    return;
                 int new = (end - f->pts) * rate;
                 f->av_frame->nb_samples = MPCLAMP(new, 0, f->av_frame->nb_samples);
             }
@@ -466,6 +479,8 @@ void mp_aframe_clip_timestamps(struct mp_aframe *f, double start, double end)
                 f->av_frame->nb_samples = 0;
                 f->pts = f_end;
             } else {
+                if (af_fmt_is_spdif(mp_aframe_get_format(f)))
+                    return;
                 int skip = (start - f->pts) * rate;
                 skip = MPCLAMP(skip, 0, f->av_frame->nb_samples);
                 mp_aframe_skip_samples(f, skip);
@@ -520,6 +535,56 @@ bool mp_aframe_set_silence(struct mp_aframe *f, int offset, int samples)
     return true;
 }
 
+bool mp_aframe_reverse(struct mp_aframe *f)
+{
+    int format = mp_aframe_get_format(f);
+    size_t bps = af_fmt_to_bytes(format);
+    if (!af_fmt_is_pcm(format) || bps > 16)
+        return false;
+
+    uint8_t **d = mp_aframe_get_data_rw(f);
+    if (!d)
+        return false;
+
+    int planes = mp_aframe_get_planes(f);
+    int samples = mp_aframe_get_size(f);
+    int channels = mp_aframe_get_channels(f);
+    size_t sstride = mp_aframe_get_sstride(f);
+
+    int plane_samples = channels;
+    if (af_fmt_is_planar(format))
+        plane_samples = 1;
+
+    for (int p = 0; p < planes; p++) {
+        for (int n = 0; n < samples / 2; n++) {
+            int s1_offset = n * sstride;
+            int s2_offset = (samples - 1 - n) * sstride;
+            for (int c = 0; c < plane_samples; c++) {
+                // Nobody said it'd be fast.
+                char tmp[16];
+                uint8_t *s1 = d[p] + s1_offset + c * bps;
+                uint8_t *s2 = d[p] + s2_offset + c * bps;
+                memcpy(tmp, s2, bps);
+                memcpy(s2, s1, bps);
+                memcpy(s1, tmp, bps);
+            }
+        }
+    }
+
+    return true;
+}
+
+int mp_aframe_approx_byte_size(struct mp_aframe *frame)
+{
+    // God damn, AVFrame is too fucking annoying. Just go with the size that
+    // allocating a new frame would use.
+    int planes = mp_aframe_get_planes(frame);
+    size_t sstride = mp_aframe_get_sstride(frame);
+    int samples = frame->av_frame->nb_samples;
+    int plane_size = MP_ALIGN_UP(sstride * MPMAX(samples, 1), 32);
+    return plane_size * planes + sizeof(*frame);
+}
+
 struct mp_aframe_pool {
     AVBufferPool *avpool;
     int element_size;
@@ -542,7 +607,11 @@ int mp_aframe_pool_allocate(struct mp_aframe_pool *pool, struct mp_aframe *frame
 {
     int planes = mp_aframe_get_planes(frame);
     size_t sstride = mp_aframe_get_sstride(frame);
-    int plane_size = MP_ALIGN_UP(sstride * MPMAX(samples, 1), 32);
+    // FFmpeg hardcodes similar hidden possibly-requirements in a number of
+    // places: av_frame_get_buffer(), libavcodec's get_buffer(), mem.c,
+    // probably more.
+    int align_samples = MP_ALIGN_UP(MPMAX(samples, 1), 32);
+    int plane_size = MP_ALIGN_UP(sstride * align_samples, 64);
     int size = plane_size * planes;
 
     if (size <= 0 || mp_aframe_is_allocated(frame))
@@ -576,6 +645,8 @@ int mp_aframe_pool_allocate(struct mp_aframe_pool *pool, struct mp_aframe *frame
     av_frame->linesize[0] = samples * sstride;
     for (int n = 0; n < planes; n++)
         av_frame->extended_data[n] = av_frame->buf[0]->data + n * plane_size;
+    for (int n = 0; n < MPMIN(planes, AV_NUM_DATA_POINTERS); n++)
+        av_frame->data[n] = av_frame->extended_data[n];
     av_frame->nb_samples = samples;
 
     return 0;

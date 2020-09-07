@@ -9,12 +9,9 @@
 * [Downloads](#downloads)
 * [Changelog](#changelog)
 * [Compilation](#compilation)
-* [FFmpeg vs. Libav](#ffmpeg-vs-libav)
-* [FFmpeg ABI compatibility](#ffmpeg-abi-compatibility)
 * [Release cycle](#release-cycle)
 * [Bug reports](#bug-reports)
 * [Contributing](#contributing)
-* [Relation to MPlayer and mplayer2](#relation-to-mplayer-and-mplayer2)
 * [License](#license)
 * [Contact](#contact)
 
@@ -23,15 +20,17 @@
 
 
 * [Wiki](https://github.com/mpv-player/mpv/wiki)
-* [FAQ](https://github.com/mpv-player/mpv/wiki/FAQ)
+* [FAQ][FAQ]
 * [Manual](http://mpv.io/manual/master/)
 
 
 ## Overview
 
 
-**mpv** is a media player based on MPlayer and mplayer2. It supports a wide
-variety of video file formats, audio and video codecs, and subtitle types.
+**mpv** is a free (as in freedom) media player for the command line. It supports
+a wide variety of media file formats, audio and video codecs, and subtitle types.
+
+There is a [FAQ][FAQ].
 
 Releases can be found on the [release list][releases].
 
@@ -41,12 +40,14 @@ Releases can be found on the [release list][releases].
 - A somewhat capable CPU. Hardware decoding might help if the CPU is too slow to
   decode video in realtime, but must be explicitly enabled with the `--hwdec`
   option.
-- A not too crappy GPU. mpv is not intended to be used with bad GPUs. There are
-  many caveats with drivers or system compositors causing tearing, stutter,
-  etc. On Windows, you might want to make sure the graphics drivers are
-  current. In some cases, ancient fallback video output methods can help
-  (such as `--vo=xv` on Linux), but this use is not recommended or supported.
-
+- A not too crappy GPU. mpv's focus is not on power-efficient playback on
+  embedded or integrated GPUs (for example, hardware decoding is not even
+  enabled by default). Low power GPUs may cause issues like tearing, stutter,
+  etc. The main video output uses shaders for video rendering and scaling,
+  rather than GPU fixed function hardware. On Windows, you might want to make
+  sure the graphics drivers are current. In some cases, ancient fallback video
+  output methods can help (such as `--vo=xv` on Linux), but this use is not
+  recommended or supported.
 
 ## Downloads
 
@@ -114,9 +115,9 @@ Essential dependencies (incomplete list):
 - Lua (optional, required for the OSC pseudo-GUI and youtube-dl integration)
 - libjpeg (optional, used for screenshots only)
 - uchardet (optional, for subtitle charset detection)
-- vdpau and vaapi libraries for hardware decoding on Linux (optional)
+- nvdec and vaapi libraries for hardware decoding on Linux (optional)
 
-Libass dependencies:
+Libass dependencies (when building libass):
 
 - gcc or clang, yasm on x86 and x86_64
 - fribidi, freetype, fontconfig development headers (for libass)
@@ -124,17 +125,17 @@ Libass dependencies:
   particularly for correct rendering of non-English text on OSX, and
   Arabic/Indic scripts on any platform)
 
-FFmpeg dependencies:
+FFmpeg dependencies (when building FFmpeg):
 
 - gcc or clang, yasm on x86 and x86_64
 - OpenSSL or GnuTLS (have to be explicitly enabled when compiling FFmpeg)
 - libx264/libmp3lame/libfdk-aac if you want to use encoding (have to be
   explicitly enabled when compiling FFmpeg)
 - For native DASH playback, FFmpeg needs to be built with --enable-libxml2
-  (although there are security implications).
+  (although there are security implications, and DASH support has lots of bugs).
+- AV1 decoding support requires dav1d.
 - For good nvidia support on Linux, make sure nv-codec-headers is installed
   and can be found by configure.
-- Libav support is broken. (See section below.)
 
 Most of the above libraries are available in suitable versions on normal
 Linux distributions. For ease of compiling the latest git master of everything,
@@ -146,28 +147,6 @@ If you want to build a Windows binary, you either have to use MSYS2 and MinGW,
 or cross-compile from Linux with MinGW. See
 [Windows compilation][windows_compilation].
 
-
-## FFmpeg vs. Libav
-
-
-Generally, mpv should work with the latest release as well as the git version
-of FFmpeg. Libav support is currently broken, because they did not add certain
-FFmpeg API changes which mpv relies on.
-
-
-## FFmpeg ABI compatibility
-
-mpv does not support linking against FFmpeg versions it was not built with, even
-if the linked version is supposedly ABI-compatible with the version it was
-compiled against. Expect malfunctions, crashes, and security issues if you
-do it anyway.
-
-The reason for not supporting this is because it creates far too much complexity
-with little to no benefit, coupled with absurd and unusable FFmpeg API
-artifacts.
-
-Newer mpv versions will refuse to start if runtime and compile time FFmpeg
-library versions mismatch.
 
 ## Release cycle
 
@@ -205,21 +184,16 @@ You can check [the wiki](https://github.com/mpv-player/mpv/wiki/Stuff-to-do)
 or the [issue tracker](https://github.com/mpv-player/mpv/issues?q=is%3Aopen+is%3Aissue+label%3A%22feature+request%22)
 for ideas on what you could contribute with.
 
-## Relation to MPlayer and mplayer2
-
-mpv is a fork of MPlayer. Much has changed, and in general, mpv should be
-considered a completely new program, rather than a MPlayer drop-in replacement.
-
-For details see [FAQ entry](https://github.com/mpv-player/mpv/wiki/FAQ#How_is_mpv_related_to_MPlayer).
-
-If you are wondering what's different from mplayer2 and MPlayer, an incomplete
-and largely unmaintained list of changes is located [here][mplayer-changes].
-
 ## License
 
 GPLv2 "or later" by default, LGPLv2.1 "or later" with `--enable-lgpl`.
 See [details.](https://github.com/mpv-player/mpv/blob/master/Copyright)
 
+## History
+
+This software is based on the MPlayer project. Before mpv existed as a project,
+the code base was briefly developed under the mplayer2 project. For details,
+see the [FAQ][FAQ].
 
 ## Contact
 
@@ -230,17 +204,12 @@ Most activity happens on the IRC channel and the github issue tracker.
 - **User IRC Channel**: `#mpv` on `irc.freenode.net`
 - **Developer IRC Channel**: `#mpv-devel` on `irc.freenode.net`
 
-To contact the `mpv` team in private write to `mpv-team@googlegroups.com`. Use
-only if discretion is required.
-
+[FAQ]: https://github.com/mpv-player/mpv/wiki/FAQ
 [releases]: https://github.com/mpv-player/mpv/releases
 [mpv-build]: https://github.com/mpv-player/mpv-build
-[homebrew-mpv]: https://github.com/mpv-player/homebrew-mpv
 [issue-tracker]:  https://github.com/mpv-player/mpv/issues
-[ffmpeg_vs_libav]: https://github.com/mpv-player/mpv/wiki/FFmpeg-versus-Libav
 [release-policy]: https://github.com/mpv-player/mpv/blob/master/DOCS/release-policy.md
 [windows_compilation]: https://github.com/mpv-player/mpv/blob/master/DOCS/compile-windows.md
-[mplayer-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/mplayer-changes.rst
 [interface-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/interface-changes.rst
 [api-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/client-api-changes.rst
 [restore-old-bindings]: https://github.com/mpv-player/mpv/blob/master/etc/restore-old-bindings.conf

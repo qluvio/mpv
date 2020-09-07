@@ -62,6 +62,8 @@ struct sd_lavc_priv {
     AVRational pkt_timebase;
     struct sub subs[MAX_QUEUE]; // most recent event first
     struct sub_bitmap *outbitmaps;
+    struct sub_bitmap *prevret;
+    int prevret_num;
     int64_t displayed_id;
     int64_t new_id;
     struct mp_image_params video_params;
@@ -78,9 +80,7 @@ static int init(struct sd *sd)
     // Supported codecs must be known to decode to paletted bitmaps
     switch (cid) {
     case AV_CODEC_ID_DVB_SUBTITLE:
-#if LIBAVCODEC_VERSION_MICRO >= 100
     case AV_CODEC_ID_DVB_TELETEXT:
-#endif
     case AV_CODEC_ID_HDMV_PGS_SUBTITLE:
     case AV_CODEC_ID_XSUB:
     case AV_CODEC_ID_DVD_SUBTITLE:
@@ -99,9 +99,7 @@ static int init(struct sd *sd)
         goto error;
     mp_lavc_set_extradata(ctx, sd->codec->extradata, sd->codec->extradata_size);
     priv->pkt_timebase = mp_get_codec_timebase(sd->codec);
-#if LIBAVCODEC_VERSION_MICRO >= 100
     ctx->pkt_timebase = priv->pkt_timebase;
-#endif
     if (avcodec_open2(ctx, sub_codec, NULL) < 0)
         goto error;
     priv->avctx = ctx;
@@ -147,10 +145,10 @@ static void convert_pal(uint32_t *colors, size_t count, bool gray)
 {
     for (int n = 0; n < count; n++) {
         uint32_t c = colors[n];
-        int b = c & 0xFF;
-        int g = (c >> 8) & 0xFF;
-        int r = (c >> 16) & 0xFF;
-        int a = (c >> 24) & 0xFF;
+        uint32_t b = c & 0xFF;
+        uint32_t g = (c >> 8) & 0xFF;
+        uint32_t r = (c >> 16) & 0xFF;
+        uint32_t a = (c >> 24) & 0xFF;
         if (gray)
             r = g = b = (r + g + b) / 3;
         // from straight to pre-multiplied alpha
@@ -193,7 +191,7 @@ static void read_sub_bitmaps(struct sd *sd, struct sub *sub)
             MP_ERR(sd, "unsupported subtitle type from libavcodec\n");
             continue;
         }
-        if (!(r->flags & AV_SUBTITLE_FLAG_FORCED) && opts->forced_subs_only)
+        if (!(r->flags & AV_SUBTITLE_FLAG_FORCED) && opts->forced_subs_only_current)
             continue;
         if (r->w <= 0 || r->h <= 0)
             continue;
@@ -230,6 +228,11 @@ static void read_sub_bitmaps(struct sd *sd, struct sub *sub)
         talloc_steal(priv, sub->data);
     }
 
+    if (!mp_image_make_writeable(sub->data)) {
+        sub->count = 0;
+        return;
+    }
+
     for (int i = 0; i < sub->count; i++) {
         struct sub_bitmap *b = &sub->inbitmaps[i];
         struct pos pos = priv->packer->result[i];
@@ -249,8 +252,8 @@ static void read_sub_bitmaps(struct sd *sd, struct sub *sub)
         b->stride = sub->data->stride[0];
         b->bitmap = sub->data->planes[0] + pos.y * b->stride + pos.x * 4;
 
-        sub->src_w = FFMAX(sub->src_w, b->x + b->w);
-        sub->src_h = FFMAX(sub->src_h, b->y + b->h);
+        sub->src_w = MPMAX(sub->src_w, b->x + b->w);
+        sub->src_h = MPMAX(sub->src_h, b->y + b->h);
 
         assert(r->nb_colors > 0);
         assert(r->nb_colors <= 256);
@@ -383,21 +386,15 @@ static void decode(struct sd *sd, struct demux_packet *packet)
     }
 }
 
-static void get_bitmaps(struct sd *sd, struct mp_osd_res d, int format,
-                        double pts, struct sub_bitmaps *res)
+static struct sub *get_current(struct sd_lavc_priv *priv, double pts)
 {
-    struct sd_lavc_priv *priv = sd->priv;
-    struct mp_subtitle_opts *opts = sd->opts;
-
-    priv->current_pts = pts;
-
     struct sub *current = NULL;
     for (int n = 0; n < MAX_QUEUE; n++) {
         struct sub *sub = &priv->subs[n];
         if (!sub->valid)
             continue;
         if (pts == MP_NOPTS_VALUE ||
-            ((sub->pts == MP_NOPTS_VALUE || pts >= sub->pts) &&
+            ((sub->pts == MP_NOPTS_VALUE || pts + 1e-6 >= sub->pts) &&
              (sub->endpts == MP_NOPTS_VALUE || pts < sub->endpts)))
         {
             // Ignore "trailing" subtitles with unknown length after 1 minute.
@@ -407,13 +404,27 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res d, int format,
             break;
         }
     }
+    return current;
+}
+
+static struct sub_bitmaps *get_bitmaps(struct sd *sd, struct mp_osd_res d,
+                                       int format, double pts)
+{
+    struct sd_lavc_priv *priv = sd->priv;
+    struct mp_subtitle_opts *opts = sd->opts;
+
+    priv->current_pts = pts;
+
+    struct sub *current = get_current(priv, pts);
+
     if (!current)
-        return;
+        return NULL;
 
     MP_TARRAY_GROW(priv, priv->outbitmaps, current->count);
     for (int n = 0; n < current->count; n++)
         priv->outbitmaps[n] = current->inbitmaps[n];
 
+    struct sub_bitmaps *res = &(struct sub_bitmaps){0};
     res->parts = priv->outbitmaps;
     res->num_parts = current->count;
     if (priv->displayed_id != current->id)
@@ -444,10 +455,86 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res d, int format,
         h = priv->video_params.h;
     }
     if (current->src_w > w || current->src_h > h) {
-        w = priv->video_params.w;
-        h = priv->video_params.h;
+        w = MPMAX(priv->video_params.w, current->src_w);
+        h = MPMAX(priv->video_params.h, current->src_h);
     }
+
+    if (opts->sub_pos != 100 && opts->ass_style_override) {
+        int offset = (100 - opts->sub_pos) / 100.0 * h;
+
+        for (int n = 0; n < res->num_parts; n++) {
+            struct sub_bitmap *sub = &res->parts[n];
+
+            // Decide by heuristic whether this is a sub-title or something
+            // else (top-title, covering whole screen).
+            if (sub->y < h / 2)
+                continue;
+
+            // Allow moving up the subtitle, but only until it clips.
+            sub->y = MPMAX(sub->y - offset, 0);
+            sub->y = MPMIN(sub->y + sub->h, h) - sub->h;
+        }
+    }
+
     osd_rescale_bitmaps(res, w, h, d, video_par);
+
+    if (opts->sub_scale != 1.0 && opts->ass_style_override) {
+        for (int n = 0; n < res->num_parts; n++) {
+            struct sub_bitmap *sub = &res->parts[n];
+
+            float shit = (opts->sub_scale - 1.0f) / 2;
+
+            // Fortunately VO isn't supposed to give a FUCKING FUCK about
+            // whether the sub might e.g. go outside of the screen.
+            sub->x -= sub->dw * shit;
+            sub->y -= sub->dh * shit;
+            sub->dw += sub->dw * shit * 2;
+            sub->dh += sub->dh * shit * 2;
+        }
+    }
+
+    if (priv->prevret_num != res->num_parts)
+        res->change_id++;
+
+    if (!res->change_id) {
+        assert(priv->prevret_num == res->num_parts);
+        for (int n = 0; n < priv->prevret_num; n++) {
+            struct sub_bitmap *a = &res->parts[n];
+            struct sub_bitmap *b = &priv->prevret[n];
+
+            if (a->x != b->x || a->y != b->y ||
+                a->dw != b->dw || a->dh != b->dh)
+            {
+                res->change_id++;
+                break;
+            }
+        }
+    }
+
+    priv->prevret_num = res->num_parts;
+    MP_TARRAY_GROW(priv, priv->prevret, priv->prevret_num);
+    memcpy(priv->prevret, res->parts, res->num_parts * sizeof(priv->prevret[0]));
+
+    return sub_bitmaps_copy(NULL, res);
+}
+
+static struct sd_times get_times(struct sd *sd, double pts)
+{
+    struct sd_lavc_priv *priv = sd->priv;
+    struct sd_times res = { .start = MP_NOPTS_VALUE, .end = MP_NOPTS_VALUE };
+
+    if (pts == MP_NOPTS_VALUE)
+        return res;
+
+    struct sub *current = get_current(priv, pts);
+
+    if (!current)
+        return res;
+
+    res.start = current->pts;
+    res.end = current->endpts;
+
+    return res;
 }
 
 static bool accepts_packet(struct sd *sd, double min_pts)
@@ -589,6 +676,7 @@ const struct sd_functions sd_lavc = {
     .init = init,
     .decode = decode,
     .get_bitmaps = get_bitmaps,
+    .get_times = get_times,
     .accepts_packet = accepts_packet,
     .control = control,
     .reset = reset,

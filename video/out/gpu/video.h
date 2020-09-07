@@ -94,6 +94,7 @@ enum tone_mapping {
     TONE_MAPPING_HABLE,
     TONE_MAPPING_GAMMA,
     TONE_MAPPING_LINEAR,
+    TONE_MAPPING_BT_2390,
 };
 
 struct gl_tone_map_opts {
@@ -107,6 +108,7 @@ struct gl_tone_map_opts {
     float desat;
     float desat_exp;
     int gamut_warning; // bool
+    int gamut_clipping; // bool
 };
 
 struct gl_video_opts {
@@ -159,7 +161,8 @@ struct voctrl_screenshot;
 
 enum {
     RENDER_FRAME_SUBS = 1 << 0,
-    RENDER_FRAME_OSD = 2 << 0,
+    RENDER_FRAME_OSD = 1 << 1,
+    RENDER_FRAME_VF_SUBS = 1 << 2,
     RENDER_FRAME_DEF = RENDER_FRAME_SUBS | RENDER_FRAME_OSD,
 };
 

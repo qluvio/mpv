@@ -32,13 +32,13 @@ static const struct native_resource_entry native_resource_map[] = {
         .name = "wl",
         .size = 0,
     },
-    [MPV_RENDER_PARAM_DRM_DISPLAY] = {
-        .name = "drm_params",
-        .size = sizeof (mpv_opengl_drm_params),
-    },
     [MPV_RENDER_PARAM_DRM_DRAW_SURFACE_SIZE] = {
         .name = "drm_draw_surface_size",
         .size = sizeof (mpv_opengl_drm_draw_surface_size),
+    },
+    [MPV_RENDER_PARAM_DRM_DISPLAY_V2] = {
+        .name = "drm_params_v2",
+        .size = sizeof (mpv_opengl_drm_params_v2),
     },
 };
 
@@ -65,7 +65,7 @@ static int init(struct render_backend *ctx, mpv_render_param *params)
     }
 
     if (!p->context)
-        return MPV_ERROR_INVALID_PARAMETER;
+        return MPV_ERROR_NOT_IMPLEMENTED;
 
     int err = p->context->fns->init(p->context, params);
     if (err < 0)

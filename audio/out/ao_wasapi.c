@@ -340,8 +340,6 @@ static int thread_control_exclusive(struct ao *ao, enum aocontrol cmd, void *arg
         if (!(state->vol_hw_support & ENDPOINT_HARDWARE_SUPPORT_MUTE))
             return CONTROL_FALSE;
         break;
-    case AOCONTROL_HAS_PER_APP_VOLUME:
-        return CONTROL_FALSE;
     }
 
     float volume;
@@ -400,8 +398,6 @@ static int thread_control_shared(struct ao *ao, enum aocontrol cmd, void *arg)
         mute = *(bool *)arg;
         ISimpleAudioVolume_SetMute(state->pAudioVolume, mute, NULL);
         return CONTROL_OK;
-    case AOCONTROL_HAS_PER_APP_VOLUME:
-        return CONTROL_TRUE;
     }
     return CONTROL_UNKNOWN;
 }
@@ -497,7 +493,7 @@ const struct ao_driver audio_out_wasapi = {
     .uninit         = uninit,
     .control        = control,
     .reset          = audio_reset,
-    .resume         = audio_resume,
+    .start          = audio_resume,
     .list_devs      = wasapi_list_devs,
     .hotplug_init   = hotplug_init,
     .hotplug_uninit = hotplug_uninit,

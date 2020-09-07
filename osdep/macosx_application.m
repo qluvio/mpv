@@ -24,6 +24,7 @@
 #include "input/input.h"
 #include "player/client.h"
 #include "options/m_config.h"
+#include "options/options.h"
 
 #import "osdep/macosx_application_objc.h"
 #include "osdep/macosx_compat.h"
@@ -43,28 +44,30 @@
 #define OPT_BASE_STRUCT struct macos_opts
 const struct m_sub_options macos_conf = {
     .opts = (const struct m_option[]) {
-        OPT_CHOICE("macos-title-bar-appearance", macos_title_bar_appearance, 0,
-                   ({"auto", 0}, {"aqua", 1}, {"darkAqua", 2},
-                    {"vibrantLight", 3}, {"vibrantDark", 4},
-                    {"aquaHighContrast", 5}, {"darkAquaHighContrast", 6},
-                    {"vibrantLightHighContrast", 7},
-                    {"vibrantDarkHighContrast", 8})),
-        OPT_CHOICE("macos-title-bar-material", macos_title_bar_material, 0,
-                   ({"titlebar", 0}, {"selection", 1}, {"menu", 2},
-                    {"popover", 3}, {"sidebar", 4}, {"headerView", 5},
-                    {"sheet", 6}, {"windowBackground", 7}, {"hudWindow", 8},
-                    {"fullScreen", 9}, {"toolTip", 10}, {"contentBackground", 11},
-                    {"underWindowBackground", 12}, {"underPageBackground", 13},
-                    {"dark", 14}, {"light", 15}, {"mediumLight", 16},
-                    {"ultraDark", 17})),
-        OPT_COLOR("macos-title-bar-color", macos_title_bar_color, 0),
-        OPT_CHOICE_OR_INT("macos-fs-animation-duration",
-                          macos_fs_animation_duration, 0, 0, 1000,
-                          ({"default", -1})),
-        OPT_CHOICE("cocoa-cb-sw-renderer", cocoa_cb_sw_renderer, 0,
-                   ({"auto", -1}, {"no", 0}, {"yes", 1})),
-        OPT_REMOVED("macos-title-bar-style", "Split into --macos-title-bar-appearance "
-                     "and --macos-title-bar-material"),
+        {"macos-title-bar-appearance", OPT_CHOICE(macos_title_bar_appearance,
+            {"auto", 0}, {"aqua", 1}, {"darkAqua", 2},
+            {"vibrantLight", 3}, {"vibrantDark", 4},
+            {"aquaHighContrast", 5}, {"darkAquaHighContrast", 6},
+            {"vibrantLightHighContrast", 7},
+            {"vibrantDarkHighContrast", 8})},
+        {"macos-title-bar-material", OPT_CHOICE(macos_title_bar_material,
+            {"titlebar", 0}, {"selection", 1}, {"menu", 2},
+            {"popover", 3}, {"sidebar", 4}, {"headerView", 5},
+            {"sheet", 6}, {"windowBackground", 7}, {"hudWindow", 8},
+            {"fullScreen", 9}, {"toolTip", 10}, {"contentBackground", 11},
+            {"underWindowBackground", 12}, {"underPageBackground", 13},
+            {"dark", 14}, {"light", 15}, {"mediumLight", 16},
+            {"ultraDark", 17})},
+        {"macos-title-bar-color", OPT_COLOR(macos_title_bar_color)},
+        {"macos-fs-animation-duration",
+            OPT_CHOICE(macos_fs_animation_duration, {"default", -1}),
+            M_RANGE(0, 1000)},
+        {"macos-force-dedicated-gpu", OPT_FLAG(macos_force_dedicated_gpu)},
+        {"cocoa-cb-sw-renderer", OPT_CHOICE(cocoa_cb_sw_renderer,
+            {"auto", -1}, {"no", 0}, {"yes", 1})},
+        {"cocoa-cb-10bit-context", OPT_FLAG(cocoa_cb_10bit_context)},
+        {"macos-title-bar-style", OPT_REMOVED("Split into --macos-title-bar-appearance "
+                     "and --macos-title-bar-material")},
         {0}
     },
     .size = sizeof(struct macos_opts),
@@ -72,6 +75,7 @@ const struct m_sub_options macos_conf = {
         .macos_title_bar_color = {0, 0, 0, 0},
         .macos_fs_animation_duration = -1,
         .cocoa_cb_sw_renderer = -1,
+        .cocoa_cb_10bit_context = 1
     },
 };
 
@@ -95,8 +99,10 @@ static Application *mpv_shared_app(void)
 
 static void terminate_cocoa_application(void)
 {
-    [NSApp hide:NSApp];
-    [NSApp terminate:NSApp];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp hide:NSApp];
+        [NSApp terminate:NSApp];
+    });
 }
 
 @implementation Application
@@ -137,7 +143,7 @@ static void terminate_cocoa_application(void)
 }
 
 static const char macosx_icon[] =
-#include "osdep/macosx_icon.inc"
+#include "generated/TOOLS/osxbundle/mpv.app/Contents/Resources/icon.icns.inc"
 ;
 
 - (NSImage *)getMPVIcon
@@ -187,6 +193,11 @@ static const char macosx_icon[] =
     return &macos_conf;
 }
 
+- (const struct m_sub_options *)getVoSubConf
+{
+    return &vo_sub_opts;
+}
+
 - (void)queueCommand:(char *)cmd
 {
     [_eventsResponder queueCommand:cmd];
@@ -205,11 +216,6 @@ static const char macosx_icon[] =
             andSelector:@selector(handleQuitEvent:withReplyEvent:)
           forEventClass:kCoreEventClass
              andEventID:kAEQuitApplication];
-}
-
-- (void)applicationWillBecomeActive:(NSNotification *)notification
-{
-    [_eventsResponder setHighestPriotityMediaKeysTap];
 }
 
 - (void)handleQuitEvent:(NSAppleEventDescriptor *)event
@@ -296,18 +302,10 @@ static void init_cocoa_application(bool regular)
         // Because activation policy has just been set to behave like a real
         // application, that policy must be reset on exit to prevent, among
         // other things, the menubar created here from remaining on screen.
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        });
     });
-}
-
-static void macosx_redirect_output_to_logfile(const char *filename)
-{
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    NSString *log_path = [NSHomeDirectory() stringByAppendingPathComponent:
-        [@"Library/Logs/" stringByAppendingFormat:@"%s.log", filename]];
-    freopen([log_path fileSystemRepresentation], "a", stdout);
-    freopen([log_path fileSystemRepresentation], "a", stderr);
-    [pool release];
 }
 
 static bool bundle_started_from_finder(char **argv)
@@ -353,7 +351,6 @@ int cocoa_main(int argc, char *argv[])
 
         if (bundle_started_from_finder(argv)) {
             setup_bundle(&argc, argv);
-            macosx_redirect_output_to_logfile("mpv");
             init_cocoa_application(true);
         } else {
             for (int i = 1; i < argc; i++)

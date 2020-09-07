@@ -16,7 +16,7 @@ The version number is the same as used for MPV_CLIENT_API_VERSION (see
 ``client.h`` how to convert between major/minor version numbers and the flat
 32 bit integer).
 
-Also, read the section ``Compatibility`` in ``client.h``.
+Also, read the section ``Compatibility`` in ``client.h``, and compatibility.rst.
 
 Options, commands, properties
 =============================
@@ -31,7 +31,41 @@ API changes
 ===========
 
 ::
+
+ --- mpv 0.33.0 ---
+ 1.109  - add MPV_RENDER_API_TYPE_SW and related (software rendering API)
+        - inactivate the opengl_cb API (always fails to initialize now)
+          The opengl_cb API was deprecated over 2 years ago. Use the render API
+          instead.
+ 1.108  - Deprecate MPV_EVENT_IDLE
+        - add mpv_event_start_file
+        - add the following fields to mpv_event_end_file: playlist_entry_id,
+          playlist_insert_id, playlist_insert_num_entries
+        - add mpv_event_to_node()
+        - add mpv_client_id()
+ 1.107  - Remove the deprecated qthelper.hpp. This was obviously not part of the
+          libmpv API, only an "additionally" provided helper, thus this is not
+          considered an API change. If you are maintaining a project that relies
+          on this header, you can simply download this file and adjust the
+          include statement to use it instead:
+
+            https://raw.githubusercontent.com/mpv-player/mpv/v0.32.0/libmpv/qthelper.hpp
+
+          It is a good idea to write better wrappers for your use, though.
+ --- mpv 0.31.0 ---
+ 1.107  - Deprecate MPV_EVENT_TICK
+
  --- mpv 0.30.0 ---
+ 1.106  - Add cancel_fn to mpv_stream_cb_info
+ 1.105  - Fix deadlock problems with MPV_RENDER_PARAM_ADVANCED_CONTROL and if
+          the "vd-lavc-dr" option is enabled (which it is by default).
+          There were no actual API changes.
+          API users on older API versions and mpv releases should set
+          "vd-lavc-dr" to "no" to avoid these issues.
+          API users must still adhere to the tricky rules documented in render.h
+          to avoid other deadlocks.
+ 1.104  - Deprecate struct mpv_opengl_drm_params. Replaced by mpv_opengl_drm_params_v2
+        - Deprecate MPV_RENDER_PARAM_DRM_DISPLAY. Replaced by MPV_RENDER_PARAM_DRM_DISPLAY_V2.
  1.103  - redo handling of async commands
         - add mpv_event_command and make it possible to return values from
           commands issued with mpv_command_async() or mpv_command_node_async()

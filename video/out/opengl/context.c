@@ -59,20 +59,20 @@ struct opengl_opts {
 #define OPT_BASE_STRUCT struct opengl_opts
 const struct m_sub_options opengl_conf = {
     .opts = (const struct m_option[]) {
-        OPT_FLAG("opengl-glfinish", use_glfinish, 0),
-        OPT_FLAG("opengl-waitvsync", waitvsync, 0),
-        OPT_INT("opengl-swapinterval", swapinterval, 0),
-        OPT_INTPAIR("opengl-check-pattern", vsync_pattern, 0),
-        OPT_INT("opengl-restrict", restrict_version, 0),
-        OPT_CHOICE("opengl-es", gles_mode, 0,
-                ({"auto", GLES_AUTO}, {"yes", GLES_YES}, {"no", GLES_NO})),
-        OPT_CHOICE("opengl-early-flush", early_flush, 0,
-                ({"no", FLUSH_NO}, {"yes", FLUSH_YES}, {"auto", FLUSH_AUTO})),
-
-        OPT_REPLACED("opengl-debug", "gpu-debug"),
-        OPT_REPLACED("opengl-sw", "gpu-sw"),
-        OPT_REPLACED("opengl-vsync-fences", "swapchain-depth"),
-        OPT_REPLACED("opengl-backend", "gpu-context"),
+        {"opengl-glfinish", OPT_FLAG(use_glfinish)},
+        {"opengl-waitvsync", OPT_FLAG(waitvsync)},
+        {"opengl-swapinterval", OPT_INT(swapinterval)},
+        {"opengl-check-pattern-a", OPT_INT(vsync_pattern[0])},
+        {"opengl-check-pattern-b", OPT_INT(vsync_pattern[1])},
+        {"opengl-restrict", OPT_INT(restrict_version)},
+        {"opengl-es", OPT_CHOICE(gles_mode,
+            {"auto", GLES_AUTO}, {"yes", GLES_YES}, {"no", GLES_NO})},
+        {"opengl-early-flush", OPT_CHOICE(early_flush,
+            {"no", FLUSH_NO}, {"yes", FLUSH_YES}, {"auto", FLUSH_AUTO})},
+        {"opengl-debug", OPT_REPLACED("gpu-debug")},
+        {"opengl-sw", OPT_REPLACED("gpu-sw")},
+        {"opengl-vsync-fences", OPT_REPLACED("swapchain-depth")},
+        {"opengl-backend", OPT_REPLACED("gpu-context")},
         {0},
     },
     .defaults = &(const struct opengl_opts) {
@@ -134,6 +134,10 @@ void ra_gl_ctx_uninit(struct ra_ctx *ctx)
         talloc_free(ctx->swapchain);
         ctx->swapchain = NULL;
     }
+
+    // Clean up any potentially left-over debug callback
+    if (ctx->ra)
+        ra_gl_set_debug(ctx->ra, false);
 
     ra_free(&ctx->ra);
 }
@@ -235,8 +239,10 @@ int ra_gl_ctx_color_depth(struct ra_swapchain *sw)
 bool ra_gl_ctx_start_frame(struct ra_swapchain *sw, struct ra_fbo *out_fbo)
 {
     struct priv *p = sw->priv;
-    out_fbo->tex = p->wrapped_fb;
-    out_fbo->flip = !p->params.flipped; // OpenGL FBs are normally flipped
+    *out_fbo = (struct ra_fbo) {
+         .tex = p->wrapped_fb,
+         .flip = !p->params.flipped, // OpenGL FBs are normally flipped
+    };
     return true;
 }
 
@@ -306,7 +312,7 @@ void ra_gl_ctx_swap_buffers(struct ra_swapchain *sw)
             check_pattern(p, step);
     }
 
-    while (p->num_vsync_fences >= sw->ctx->opts.swapchain_depth) {
+    while (p->num_vsync_fences >= sw->ctx->vo->opts->swapchain_depth) {
         gl->ClientWaitSync(p->vsync_fences[0], GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
         gl->DeleteSync(p->vsync_fences[0]);
         MP_TARRAY_REMOVE_AT(p->vsync_fences, p->num_vsync_fences, 0);

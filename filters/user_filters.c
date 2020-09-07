@@ -4,7 +4,7 @@
 
 #include "common/common.h"
 #include "common/msg.h"
-#include "options/m_config.h"
+#include "options/m_config_frontend.h"
 
 #include "f_lavfi.h"
 #include "user_filters.h"
@@ -20,17 +20,27 @@ static bool get_desc_from(const struct mp_user_filter_entry **list, int num,
     return true;
 }
 
+static bool check_unknown_entry(const char *name, int media_type)
+{
+    // Generic lavfi bridge: skip the lavfi- prefix, if present.
+    if (strncmp(name, "lavfi-", 6) == 0)
+        name += 6;
+    return mp_lavfi_is_usable(name, media_type);
+}
+
 // --af option
 
 const struct mp_user_filter_entry *af_list[] = {
     &af_lavfi,
     &af_lavfi_bridge,
     &af_scaletempo,
+    &af_scaletempo2,
     &af_format,
 #if HAVE_RUBBERBAND
     &af_rubberband,
 #endif
     &af_lavcac3enc,
+    &af_drop,
 };
 
 static bool get_af_desc(struct m_obj_desc *dst, int index)
@@ -48,11 +58,17 @@ static void print_af_lavfi_help(struct mp_log *log, const char *name)
     print_lavfi_help(log, name, AVMEDIA_TYPE_AUDIO);
 }
 
+static bool check_af_lavfi(const char *name)
+{
+    return check_unknown_entry(name, AVMEDIA_TYPE_AUDIO);
+}
+
 const struct m_obj_list af_obj_list = {
     .get_desc = get_af_desc,
     .description = "audio filters",
     .allow_disable_entries = true,
     .allow_unknown_entries = true,
+    .check_unknown_entry = check_af_lavfi,
     .print_help_list = print_af_help_list,
     .print_unknown_entry_help = print_af_lavfi_help,
 };
@@ -64,11 +80,11 @@ const struct mp_user_filter_entry *vf_list[] = {
     &vf_lavfi,
     &vf_lavfi_bridge,
     &vf_sub,
-#if HAVE_VAPOURSYNTH_CORE && HAVE_VAPOURSYNTH
-    &vf_vapoursynth,
+#if HAVE_ZIMG
+    &vf_fingerprint,
 #endif
-#if HAVE_VAPOURSYNTH_CORE && HAVE_VAPOURSYNTH_LAZY
-    &vf_vapoursynth_lazy,
+#if HAVE_VAPOURSYNTH
+    &vf_vapoursynth,
 #endif
 #if HAVE_VDPAU
     &vf_vdpaupp,
@@ -78,6 +94,9 @@ const struct mp_user_filter_entry *vf_list[] = {
 #endif
 #if HAVE_D3D_HWACCEL
     &vf_d3d11vpp,
+#endif
+#if HAVE_EGL_HELPERS && HAVE_GL && HAVE_EGL
+    &vf_gpu,
 #endif
 };
 
@@ -96,11 +115,17 @@ static void print_vf_lavfi_help(struct mp_log *log, const char *name)
     print_lavfi_help(log, name, AVMEDIA_TYPE_VIDEO);
 }
 
+static bool check_vf_lavfi(const char *name)
+{
+    return check_unknown_entry(name, AVMEDIA_TYPE_VIDEO);
+}
+
 const struct m_obj_list vf_obj_list = {
     .get_desc = get_vf_desc,
     .description = "video filters",
     .allow_disable_entries = true,
     .allow_unknown_entries = true,
+    .check_unknown_entry = check_vf_lavfi,
     .print_help_list = print_vf_help_list,
     .print_unknown_entry_help = print_vf_lavfi_help,
 };

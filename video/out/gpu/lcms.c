@@ -78,16 +78,16 @@ static int validate_3dlut_size_opt(struct mp_log *log, const m_option_t *opt,
 #define OPT_BASE_STRUCT struct mp_icc_opts
 const struct m_sub_options mp_icc_conf = {
     .opts = (const m_option_t[]) {
-        OPT_FLAG("use-embedded-icc-profile", use_embedded, 0),
-        OPT_STRING("icc-profile", profile, M_OPT_FILE),
-        OPT_FLAG("icc-profile-auto", profile_auto, 0),
-        OPT_STRING("icc-cache-dir", cache_dir, M_OPT_FILE),
-        OPT_INT("icc-intent", intent, 0),
-        OPT_CHOICE_OR_INT("icc-contrast", contrast, 0, 0, 1000000, ({"inf", -1})),
-        OPT_STRING_VALIDATE("icc-3dlut-size", size_str, 0, validate_3dlut_size_opt),
-
-        OPT_REPLACED("3dlut-size", "icc-3dlut-size"),
-        OPT_REMOVED("icc-cache", "see icc-cache-dir"),
+        {"use-embedded-icc-profile", OPT_FLAG(use_embedded)},
+        {"icc-profile", OPT_STRING(profile), .flags = M_OPT_FILE},
+        {"icc-profile-auto", OPT_FLAG(profile_auto)},
+        {"icc-cache-dir", OPT_STRING(cache_dir), .flags = M_OPT_FILE},
+        {"icc-intent", OPT_INT(intent)},
+        {"icc-contrast", OPT_CHOICE(contrast, {"inf", -1}),
+            M_RANGE(0, 1000000)},
+        {"icc-3dlut-size", OPT_STRING_VALIDATE(size_str, validate_3dlut_size_opt)},
+        {"3dlut-size", OPT_REPLACED("icc-3dlut-size")},
+        {"icc-cache", OPT_REMOVED("see icc-cache-dir")},
         {0}
     },
     .size = sizeof(struct mp_icc_opts),
@@ -253,7 +253,10 @@ static cmsHPROFILE get_vid_profile(struct gl_lcms *p, cmsContext cms,
     switch (trc) {
     case MP_CSP_TRC_LINEAR:  tonecurve[0] = cmsBuildGamma(cms, 1.0); break;
     case MP_CSP_TRC_GAMMA18: tonecurve[0] = cmsBuildGamma(cms, 1.8); break;
+    case MP_CSP_TRC_GAMMA20: tonecurve[0] = cmsBuildGamma(cms, 2.0); break;
     case MP_CSP_TRC_GAMMA22: tonecurve[0] = cmsBuildGamma(cms, 2.2); break;
+    case MP_CSP_TRC_GAMMA24: tonecurve[0] = cmsBuildGamma(cms, 2.4); break;
+    case MP_CSP_TRC_GAMMA26: tonecurve[0] = cmsBuildGamma(cms, 2.6); break;
     case MP_CSP_TRC_GAMMA28: tonecurve[0] = cmsBuildGamma(cms, 2.8); break;
 
     case MP_CSP_TRC_SRGB:
